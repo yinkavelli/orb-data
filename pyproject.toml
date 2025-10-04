@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orb-data"
+version = "0.1.0"
+description = "Lightweight utilities for fetching OHLCV data and computing ORB levels"
+authors = [{name="Your Name"}]
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "ccxt>=4.0.0",
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "plotly>=5.0.0",
+  "streamlit>=1.30.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "black"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["orb_data*"]
