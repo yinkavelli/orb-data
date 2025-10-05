@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
 import time
 from datetime import datetime, timezone
-from typing import Iterable, List
+from typing import Iterable, List, Sequence, Tuple
 
 import ccxt
+from ccxt.base.errors import ExchangeError, NetworkError
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 def _to_millis(value: datetime | int | float) -> int:
@@ -26,16 +31,58 @@ class BinanceClient:
         rate_limit_ms: int = 1200,
         spot: bool = True,
         enable_rate_limit: bool = True,
+        fallback_exchanges: Sequence[str] | None = None,
     ) -> None:
-        self.exchange = ccxt.binance(
-            {
+        exchanges = tuple(fallback_exchanges or ("binance", "binanceus"))
+        self.exchange_id: str | None = None
+        self.exchange = self._initialise_exchange(
+            exchanges,
+            rate_limit_ms=rate_limit_ms,
+            spot=spot,
+            enable_rate_limit=enable_rate_limit,
+        )
+
+    def _initialise_exchange(
+        self,
+        exchanges: Sequence[str],
+        *,
+        rate_limit_ms: int,
+        spot: bool,
+        enable_rate_limit: bool,
+    ) -> ccxt.Exchange:
+        errors: List[Tuple[str, Exception]] = []
+        for exchange_id in exchanges:
+            exchange_ctor = getattr(ccxt, exchange_id, None)
+            if exchange_ctor is None:
+                logger.warning("ccxt has no exchange named %s; skipping", exchange_id)
+                continue
+            params = {
                 "enableRateLimit": enable_rate_limit,
                 "rateLimit": rate_limit_ms,
-                "options": {"defaultType": "spot" if spot else "future"},
             }
-        )
-        # Pre-load markets so ccxt knows about symbol metadata (id vs unified symbol)
-        self.exchange.load_markets()
+            if exchange_id.startswith("binance"):
+                params["options"] = {"defaultType": "spot" if spot else "future"}
+
+            try:
+                exchange = exchange_ctor(params)
+                exchange.load_markets()
+            except (ExchangeError, NetworkError) as exc:
+                errors.append((exchange_id, exc))
+                logger.warning(
+                    "Failed to initialise %s exchange via ccxt: %s", exchange_id, exc
+                )
+                continue
+
+            self.exchange_id = exchange_id
+            logger.info("Using %s exchange via ccxt", exchange_id)
+            return exchange
+
+        if errors:
+            formatted = "; ".join(f"{name}: {exc}" for name, exc in errors)
+            raise RuntimeError(
+                f"Unable to initialise any Binance exchange (tried {', '.join(name for name, _ in errors)}): {formatted}"
+            )
+        raise RuntimeError("No exchanges available for initialisation")
 
     def available_symbols(self, *, usdt_only: bool = True) -> List[str]:
         markets = self.exchange.markets

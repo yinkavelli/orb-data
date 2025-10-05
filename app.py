@@ -115,10 +115,15 @@ if run_btn:
                 else:
                     status.update(label="Fetch complete", state="complete")
                     st.success(f"Fetched {frame.shape[0]} rows across {len(pipeline.symbols)} symbol(s).")
+                    exchange_name = getattr(pipeline.client, "exchange_id", None)
+                    if exchange_name:
+                        st.caption(f"Data source: ccxt.{exchange_name}")
                     st.session_state["orb_df"] = frame
                     st.session_state["orb_symbols"] = list(pipeline.symbols)
                     st.session_state["orb_chart_tf"] = chart_tf
                     st.session_state["orb_orb_tf"] = orb_tf
+                    if exchange_name:
+                        st.session_state["orb_exchange"] = exchange_name
         st.toast("Fetch finished")
 
 if "orb_df" not in st.session_state:
@@ -129,10 +134,13 @@ frame: pd.DataFrame = st.session_state["orb_df"]
 symbols = st.session_state["orb_symbols"]
 chart_tf = st.session_state["orb_chart_tf"]
 orb_tf = st.session_state["orb_orb_tf"]
+exchange_name = st.session_state.get("orb_exchange")
 
 st.markdown("---")
 st.subheader("Visualization")
 st.caption(f"Chart timeframe: {chart_tf} | ORB timeframe: {orb_tf}")
+if exchange_name:
+    st.caption(f"Exchange source: ccxt.{exchange_name}")
 
 symbol_choice = st.selectbox("Symbol", symbols, key="symbol_selector")
 symbol_df = _extract_symbol_frame(frame, symbol_choice)
