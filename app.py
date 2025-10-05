@@ -74,13 +74,32 @@ def _ensure_time_columns(df: pd.DataFrame) -> pd.DataFrame:
 with st.sidebar:
     st.header("Parameters")
     symbols_text = st.text_input("Symbols", value=DEFAULT_SYMBOLS)
-    chart_tf = st.selectbox("Chart timeframe", TIMEFRAMES, index=2)
-    orb_tf = st.selectbox("ORB timeframe", TIMEFRAMES, index=2, help="Timeframe used for ORB levels")
-    start_dt = st.date_input("Start date", value=date(2024, 1, 1))
+    chart_tf = st.selectbox("Chart timeframe", TIMEFRAMES, index=0)
+    orb_tf = st.selectbox("ORB timeframe", TIMEFRAMES, index=3, help="Timeframe used for ORB levels")
+    start_dt = st.date_input("Start date", value=date(2025, 9, 30))
     use_end = st.checkbox("Use end date", value=False)
     end_dt = None
     if use_end:
         end_dt = st.date_input("End date", value=date.today())
+    volume_window = st.number_input(
+        "Percentile lookback (candles)",
+        min_value=5,
+        max_value=500,
+        value=20,
+        step=1,
+        help="Window used to compute volume/spread percentiles.",
+    )
+    bin_labels = {
+        "3 bins (Low / Average / High)": 3,
+        "5 bins (Very Low → Very High)": 5,
+    }
+    bin_choice = st.selectbox(
+        "Percentile bins",
+        options=list(bin_labels.keys()),
+        index=0,
+        help="Number of percentile buckets for candle volume and spread.",
+    )
+    percentile_bins = bin_labels[bin_choice]
     run_btn = st.button("Fetch data", type="primary")
 
 symbols: List[str] = []
@@ -102,6 +121,8 @@ if run_btn:
                     start=start_iso,
                     end=end_iso,
                     orb_timeframe=orb_tf,
+                    volume_percentile_window=int(volume_window),
+                    percentile_bins=int(percentile_bins),
                 )
                 frame = pipeline.run()
             except Exception as exc:
@@ -122,6 +143,8 @@ if run_btn:
                     st.session_state["orb_symbols"] = list(pipeline.symbols)
                     st.session_state["orb_chart_tf"] = chart_tf
                     st.session_state["orb_orb_tf"] = orb_tf
+                    st.session_state["orb_volume_window"] = int(volume_window)
+                    st.session_state["orb_percentile_bins"] = int(percentile_bins)
                     if exchange_name:
                         st.session_state["orb_exchange"] = exchange_name
         st.toast("Fetch finished")
@@ -135,14 +158,36 @@ symbols = st.session_state["orb_symbols"]
 chart_tf = st.session_state["orb_chart_tf"]
 orb_tf = st.session_state["orb_orb_tf"]
 exchange_name = st.session_state.get("orb_exchange")
+volume_window = st.session_state.get("orb_volume_window", int(volume_window))
+percentile_bins = st.session_state.get("orb_percentile_bins", int(percentile_bins))
 
 st.markdown("---")
+
+symbol_choice = st.selectbox("Symbol", symbols, key="symbol_selector")
+
 st.subheader("Visualization")
 st.caption(f"Chart timeframe: {chart_tf} | ORB timeframe: {orb_tf}")
 if exchange_name:
     st.caption(f"Exchange source: ccxt.{exchange_name}")
+st.caption(f"Percentile window: {volume_window} | Bins: {percentile_bins}")
 
-symbol_choice = st.selectbox("Symbol", symbols, key="symbol_selector")
+session_cols = [col for col in frame.columns if col.startswith("session_id_")]
+if session_cols:
+    session_names = [col.replace("session_id_", "") for col in session_cols]
+    color_map = {
+        "asia": "#1f77b4",
+        "europe": "#ff7f0e",
+        "us": "#2ca02c",
+        "overnight": "#9467bd",
+    }
+    cards = st.columns(len(session_names))
+    for col, name in zip(cards, session_names):
+        with col:
+            st.markdown(
+                f"<div style='background:{color_map.get(name, '#cccccc')}; color:white; padding:6px 10px; border-radius:6px; font-size:0.75rem; text-align:center;'>"
+                f"{name.upper()}" "</div>",
+                unsafe_allow_html=True,
+            )
 symbol_df = _extract_symbol_frame(frame, symbol_choice)
 if symbol_df.empty:
     st.warning("No data available for the selected symbol.")
@@ -164,34 +209,41 @@ if symbol_choice not in st.session_state[date_state_key] or st.session_state[dat
 index_lookup = {ts: idx for idx, ts in enumerate(available_dates)}
 current_date = st.session_state[date_state_key][symbol_choice]
 
-prev_col, next_col, picker_col = st.columns([1, 1, 3])
+session_picker_key = f"date_picker_{symbol_choice}"
+current_idx = index_lookup[current_date]
+picked = st.selectbox(
+    f"Session day ({LOCAL_TZ_LABEL})",
+    options=available_dates,
+    index=current_idx,
+    format_func=lambda ts: ts.strftime("%Y-%m-%d"),
+    key=session_picker_key,
+)
+if picked != current_date:
+    st.session_state[date_state_key][symbol_choice] = picked
+    current_date = picked
+
+prev_col, next_col = st.columns([1, 1])
 with prev_col:
     disable_prev = index_lookup[current_date] == 0
     if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
         idx = index_lookup[current_date]
         if idx > 0:
-            st.session_state[date_state_key][symbol_choice] = available_dates[idx - 1]
-            current_date = st.session_state[date_state_key][symbol_choice]
+            new_date = available_dates[idx - 1]
+            st.session_state[date_state_key][symbol_choice] = new_date
+            st.session_state[session_picker_key] = new_date
+            current_date = new_date
 with next_col:
     disable_next = index_lookup[current_date] == len(available_dates) - 1
     if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
         idx = index_lookup[current_date]
         if idx < len(available_dates) - 1:
-            st.session_state[date_state_key][symbol_choice] = available_dates[idx + 1]
-            current_date = st.session_state[date_state_key][symbol_choice]
+            new_date = available_dates[idx + 1]
+            st.session_state[date_state_key][symbol_choice] = new_date
+            st.session_state[session_picker_key] = new_date
+            current_date = new_date
 
 current_date = st.session_state[date_state_key][symbol_choice]
 current_idx = index_lookup[current_date]
-with picker_col:
-    picked = st.selectbox(
-        f"Session day ({LOCAL_TZ_LABEL})",
-        options=available_dates,
-        index=current_idx,
-        format_func=lambda ts: ts.strftime("%Y-%m-%d"),
-        key=f"date_picker_{symbol_choice}",
-    )
-    st.session_state[date_state_key][symbol_choice] = picked
-    current_date = picked
 
 session_mode = st.radio("Session filter", ["All sessions", "Custom"], horizontal=True, key="session_mode")
 session_select_key = "session_multiselect"

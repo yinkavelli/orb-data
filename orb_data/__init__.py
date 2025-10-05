@@ -1,3 +1,4 @@
+from .candles import add_candle_statistics, add_volume_spread_bins
 from .client import BinanceClient, filter_usdt_symbols
 from .orb_levels import (
     DEFAULT_SESSIONS,
@@ -17,4 +18,6 @@ __all__ = [
     "annotate_session_orb",
     "make_orb_figure",
     "OrbDataPipeline",
+    "add_candle_statistics",
+    "add_volume_spread_bins",
 ]

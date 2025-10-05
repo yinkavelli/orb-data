@@ -142,6 +142,7 @@ def make_orb_figure(
     orb_delta = _timeframe_to_timedelta(orb_tf_value)
     chart_tf_value = timeframe
 
+    sessions_seen = []
     if show_sessions:
         session_ids = [col for col in data.columns if col.startswith("session_id_")]
         for sid in session_ids:
@@ -154,6 +155,7 @@ def make_orb_figure(
             if high_col not in data.columns or low_col not in data.columns:
                 continue
             base_color = _session_color(name)
+            sessions_seen.append((name, base_color))
             show_leg = True
             for chunk in _iter_session_chunks(data, name):
                 fig.add_trace(
@@ -272,18 +274,11 @@ def make_orb_figure(
             tickfont=dict(color="#424242"),
             title_standoff=24,
         ),
-        margin=dict(t=70, l=60, r=220, b=110),
+        margin=dict(t=70, l=60, r=160, b=110),
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
         legend=dict(
-            orientation="v",
-            yanchor="top",
-            y=1,
-            xanchor="left",
-            x=1.02,
-            bgcolor="rgba(255,255,255,0.95)",
-            bordercolor="#d0d0d0",
-            borderwidth=1,
+            visible=False,
         ),
     )
     return fig

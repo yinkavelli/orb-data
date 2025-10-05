@@ -8,6 +8,7 @@ from typing import Sequence
 import numpy as np
 import pandas as pd
 
+from .candles import add_candle_statistics, add_volume_spread_bins
 from .client import BinanceClient, filter_usdt_symbols
 from .orb_levels import (
     DEFAULT_SESSIONS,
@@ -91,6 +92,8 @@ class OrbDataPipeline:
     client: BinanceClient = field(default_factory=BinanceClient)
     usdt_only: bool = True
     sort_by_symbol: bool = True
+    volume_percentile_window: int = 20
+    percentile_bins: int = 3
 
     def __post_init__(self) -> None:
         if not self.symbols:
@@ -105,6 +108,10 @@ class OrbDataPipeline:
         self.start_dt = _coerce_datetime(self.start)
         self.end_dt = _coerce_datetime(self.end) if self.end is not None else None
         self.orb_timeframe = self.orb_timeframe or self.chart_timeframe
+        if self.volume_percentile_window < 1:
+            raise ValueError("volume_percentile_window must be >= 1")
+        if self.percentile_bins not in (3, 5):
+            raise ValueError("percentile_bins must be 3 or 5")
 
     def run(self) -> pd.DataFrame:
         frames: list[pd.DataFrame] = []
@@ -149,6 +156,13 @@ class OrbDataPipeline:
                     price_df[column] = price_df[column].fillna(False).astype(bool)
                 else:
                     price_df[column] = price_df[column].ffill()
+
+            price_df = add_candle_statistics(price_df)
+            price_df = add_volume_spread_bins(
+                price_df,
+                window=self.volume_percentile_window,
+                bins=self.percentile_bins,
+            )
 
             if orb_columns:
                 for session in self.sessions:
