@@ -110,6 +110,29 @@ def make_orb_figure(
         )
     )
 
+    if "ema_5" in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["ema_5"],
+                mode="lines",
+                name="EMA 5",
+                line=dict(color="#ff6f61", width=1.6),
+                hovertemplate="EMA 5: %{y:.2f}<extra></extra>",
+            )
+        )
+    if "ema_13" in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["ema_13"],
+                mode="lines",
+                name="EMA 13",
+                line=dict(color="#00acc1", width=1.4),
+                hovertemplate="EMA 13: %{y:.2f}<extra></extra>",
+            )
+        )
+
     shading_windows: List[Tuple[pd.Timestamp, pd.Timestamp, str]] = []
     orb_tf_value = None
     if "orb_base_timeframe" in data.columns:
@@ -174,6 +197,29 @@ def make_orb_figure(
                             hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
                         )
                     )
+                for level_col, label_suffix, dash, opacity in (
+                    (f"L1_bull_{name}", "L1+", "dash", 0.55),
+                    (f"L2_bull_{name}", "L2+", "dot", 0.45),
+                    (f"L3_bull_{name}", "L3+", "dashdot", 0.35),
+                    (f"L1_bear_{name}", "L1-", "dash", 0.55),
+                    (f"L2_bear_{name}", "L2-", "dot", 0.45),
+                    (f"L3_bear_{name}", "L3-", "dashdot", 0.35),
+                ):
+                    if level_col in chunk.columns and chunk[level_col].notna().any():
+                        fig.add_trace(
+                            go.Scatter(
+                                x=chunk.index,
+                                y=chunk[level_col],
+                                mode="lines",
+                                name=f"{name.upper()} {label_suffix}",
+                                line=dict(color=base_color, width=1, dash=dash),
+                                opacity=opacity,
+                                legendgroup=f"session_{name}",
+                                showlegend=show_leg,
+                                hovertemplate=f"{name.upper()} {label_suffix}: %{{y:.2f}}<extra></extra>",
+                            )
+                        )
+                        show_leg = False
                 if (
                     orb_delta is not None
                     and chart_tf_value

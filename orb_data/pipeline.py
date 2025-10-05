@@ -112,7 +112,7 @@ class OrbDataPipeline:
                 orb_columns = [
                     col
                     for col in orb_df.columns
-                    if col.startswith(("orb_", "L1_", "L2_", "session_id_", "is_orb"))
+                    if col.startswith(("orb_", "L1_", "L2_", "L3_", "session_id_", "is_orb"))
                 ]
                 if orb_columns:
                     aligned_orb = orb_df[orb_columns].reindex(price_df.index, method="ffill")
@@ -123,6 +123,10 @@ class OrbDataPipeline:
                     price_df[column] = price_df[column].fillna(False).astype(bool)
                 else:
                     price_df[column] = price_df[column].ffill()
+
+            if "close" in price_df.columns:
+                price_df["ema_5"] = price_df["close"].ewm(span=5, adjust=False).mean()
+                price_df["ema_13"] = price_df["close"].ewm(span=13, adjust=False).mean()
 
             index_utc = price_df.index
             if getattr(index_utc, "tz", None) is None:

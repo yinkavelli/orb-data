@@ -42,10 +42,17 @@ def annotate_daily_orb(df: pd.DataFrame) -> pd.DataFrame:
     range_ = per_day["orb_high_daily"] - per_day["orb_low_daily"]
 
     per_day["orb_range_daily"] = range_
-    per_day["L1_bull_daily"] = per_day["orb_high_daily"] + range_
-    per_day["L2_bull_daily"] = per_day["orb_high_daily"] + 2.0 * range_
-    per_day["L1_bear_daily"] = per_day["orb_low_daily"] - range_
-    per_day["L2_bear_daily"] = per_day["orb_low_daily"] - 2.0 * range_
+
+    extensions = {
+        "L1_bull_daily": per_day["orb_high_daily"] + 0.5 * range_,
+        "L2_bull_daily": per_day["orb_high_daily"] + 1.0 * range_,
+        "L3_bull_daily": per_day["orb_high_daily"] + 2.0 * range_,
+        "L1_bear_daily": per_day["orb_low_daily"] - 0.5 * range_,
+        "L2_bear_daily": per_day["orb_low_daily"] - 1.0 * range_,
+        "L3_bear_daily": per_day["orb_low_daily"] - 2.0 * range_,
+    }
+    for column, series in extensions.items():
+        per_day[column] = series
 
     per_day["__date"] = per_day.index.tz_convert("UTC").normalize().date
     merged = per_day.reset_index()
@@ -96,22 +103,22 @@ def annotate_session_orb(df: pd.DataFrame, sessions: Sequence[SessionConfig]) ->
             orb_mid = (orb_high + orb_low) / 2.0
             range_ = orb_high - orb_low
 
-            l1_bull = orb_high + range_
-            l2_bull = orb_high + 2.0 * range_
-            l1_bear = orb_low - range_
-            l2_bear = orb_low - 2.0 * range_
+            extensions = {
+                f"orb_high_{name}": orb_high,
+                f"orb_low_{name}": orb_low,
+                f"orb_mid_{name}": orb_mid,
+                f"orb_range_{name}": range_,
+                f"L1_bull_{name}": orb_high + 0.5 * range_,
+                f"L2_bull_{name}": orb_high + 1.0 * range_,
+                f"L3_bull_{name}": orb_high + 2.0 * range_,
+                f"L1_bear_{name}": orb_low - 0.5 * range_,
+                f"L2_bear_{name}": orb_low - 1.0 * range_,
+                f"L3_bear_{name}": orb_low - 2.0 * range_,
+            }
 
-            for column, series in (
-                (f"orb_high_{name}", orb_high),
-                (f"orb_low_{name}", orb_low),
-                (f"orb_mid_{name}", orb_mid),
-                (f"orb_range_{name}", range_),
-                (f"L1_bull_{name}", l1_bull),
-                (f"L2_bull_{name}", l2_bull),
-                (f"L1_bear_{name}", l1_bear),
-                (f"L2_bear_{name}", l2_bear),
-            ):
-                out[column] = pd.NA
+            for column, series in extensions.items():
+                if column not in out.columns:
+                    out[column] = np.nan
                 out.loc[in_session, column] = series
         else:
             for column in (
@@ -121,10 +128,13 @@ def annotate_session_orb(df: pd.DataFrame, sessions: Sequence[SessionConfig]) ->
                 f"orb_range_{name}",
                 f"L1_bull_{name}",
                 f"L2_bull_{name}",
+                f"L3_bull_{name}",
                 f"L1_bear_{name}",
                 f"L2_bear_{name}",
+                f"L3_bear_{name}",
             ):
-                out[column] = pd.NA
+                if column not in out.columns:
+                    out[column] = np.nan
 
     return out
 
