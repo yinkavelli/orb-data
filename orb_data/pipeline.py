@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
 
+import numpy as np
 import pandas as pd
 
 from .client import BinanceClient, filter_usdt_symbols
@@ -51,6 +52,31 @@ def _prepare_price_df(frame: pd.DataFrame) -> pd.DataFrame:
         df["volume_usdt"] = df["quote_volume"].where(df["quote_volume"] > 0, frame["close"] * df["volume"])
     return df
 
+
+def _parse_hhmm(value: str) -> pd.Timedelta:
+    hours, minutes = map(int, value.split(':'))
+    return pd.Timedelta(hours=hours, minutes=minutes)
+
+
+def _session_active_mask(index: pd.Index, session: SessionConfig) -> pd.Series:
+    idx = pd.DatetimeIndex(index)
+    if idx.tz is None:
+        idx = idx.tz_localize('UTC')
+    else:
+        idx = idx.tz_convert('UTC')
+
+    base = idx.normalize()
+    start_offset = _parse_hhmm(session.start_utc)
+    end_offset = _parse_hhmm(session.end_utc)
+
+    session_start = base + start_offset
+    session_end = base + end_offset
+    wraps = session_end <= session_start
+    if wraps.any():
+        session_end = session_end + pd.to_timedelta(wraps.astype(int), unit='D')
+
+    mask = (idx >= session_start) & (idx < session_end)
+    return pd.Series(mask, index=index)
 
 @dataclass
 class OrbDataPipeline:
@@ -124,6 +150,30 @@ class OrbDataPipeline:
                 else:
                     price_df[column] = price_df[column].ffill()
 
+            if orb_columns:
+                for session in self.sessions:
+                    name = session.name
+                    mask = _session_active_mask(price_df.index, session)
+                    sid_col = f"session_id_{name}"
+                    if sid_col in price_df.columns:
+                        price_df.loc[~mask, sid_col] = pd.NA
+
+                    level_cols = [
+                        f"orb_high_{name}",
+                        f"orb_low_{name}",
+                        f"orb_mid_{name}",
+                        f"orb_range_{name}",
+                        f"L1_bull_{name}",
+                        f"L2_bull_{name}",
+                        f"L3_bull_{name}",
+                        f"L1_bear_{name}",
+                        f"L2_bear_{name}",
+                        f"L3_bear_{name}",
+                    ]
+                    for col in level_cols:
+                        if col in price_df.columns:
+                            price_df.loc[~mask, col] = np.nan
+
             if "close" in price_df.columns:
                 price_df["ema_5"] = price_df["close"].ewm(span=5, adjust=False).mean()
                 price_df["ema_13"] = price_df["close"].ewm(span=13, adjust=False).mean()
@@ -154,3 +204,4 @@ class OrbDataPipeline:
 
 
 __all__ = ["OrbDataPipeline"]
+
