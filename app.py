@@ -230,7 +230,6 @@ with prev_col:
         if idx > 0:
             new_date = available_dates[idx - 1]
             st.session_state[date_state_key][symbol_choice] = new_date
-            st.session_state[session_picker_key] = new_date
             current_date = new_date
 with next_col:
     disable_next = index_lookup[current_date] == len(available_dates) - 1
@@ -239,7 +238,6 @@ with next_col:
         if idx < len(available_dates) - 1:
             new_date = available_dates[idx + 1]
             st.session_state[date_state_key][symbol_choice] = new_date
-            st.session_state[session_picker_key] = new_date
             current_date = new_date
 
 current_date = st.session_state[date_state_key][symbol_choice]
