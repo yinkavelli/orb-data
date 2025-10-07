@@ -16,9 +16,9 @@ class SessionConfig:
 
 DEFAULT_SESSIONS: Sequence[SessionConfig] = (
     SessionConfig(name="asia", start_utc="00:00", end_utc="08:00"),
-    SessionConfig(name="europe", start_utc="08:00", end_utc="13:00"),
-    SessionConfig(name="us", start_utc="13:00", end_utc="21:00"),
-    SessionConfig(name="overnight", start_utc="21:00", end_utc="24:00"),
+    SessionConfig(name="europe", start_utc="07:00", end_utc="12:00"),
+    SessionConfig(name="us", start_utc="13:30", end_utc="21:30"),
+    SessionConfig(name="overnight", start_utc="21:30", end_utc="24:00"),
 )
 
 
