@@ -251,6 +251,32 @@ def make_orb_figure(
         )
     )
 
+    if "ema_5" in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["ema_5"].astype(float),
+                mode="lines",
+                line=dict(color="#00897B", width=1.4),
+                showlegend=False,
+                hovertemplate="EMA 5: %{y:,.2f}<extra></extra>",
+                name="EMA 5",
+            )
+        )
+
+    if "ema_13" in data.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["ema_13"].astype(float),
+                mode="lines",
+                line=dict(color="#3949AB", width=1.4),
+                showlegend=False,
+                hovertemplate="EMA 13: %{y:,.2f}<extra></extra>",
+                name="EMA 13",
+            )
+        )
+
     shading_windows: List[Tuple[pd.Timestamp, pd.Timestamp, str]] = []
     orb_tf_value = None
     if "orb_base_timeframe" in data.columns:
