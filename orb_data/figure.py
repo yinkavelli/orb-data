@@ -338,6 +338,48 @@ def make_orb_figure(
                             hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
                         )
                     )
+
+                bull_specs = {
+                    "L1_bull": ("dash", 1.0),
+                    "L2_bull": ("dot", 1.0),
+                    "L3_bull": ("dashdot", 1.0),
+                }
+                bear_specs = {
+                    "L1_bear": ("dash", 1.0),
+                    "L2_bear": ("dot", 1.0),
+                    "L3_bear": ("dashdot", 1.0),
+                }
+
+                for suffix, (dash_style, width) in bull_specs.items():
+                    level_col = f"{suffix}_{name}"
+                    if level_col in chunk.columns and chunk[level_col].notna().any():
+                        fig.add_trace(
+                            go.Scatter(
+                                x=chunk.index,
+                                y=chunk[level_col],
+                                mode="lines",
+                                line=dict(color=base_color, width=width, dash=dash_style),
+                                opacity=0.65,
+                                showlegend=False,
+                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bull: %{{y:.2f}}<extra></extra>",
+                            )
+                        )
+
+                faded_color = _hex_to_rgba(base_color, 0.55)
+                for suffix, (dash_style, width) in bear_specs.items():
+                    level_col = f"{suffix}_{name}"
+                    if level_col in chunk.columns and chunk[level_col].notna().any():
+                        fig.add_trace(
+                            go.Scatter(
+                                x=chunk.index,
+                                y=chunk[level_col],
+                                mode="lines",
+                                line=dict(color=faded_color, width=width, dash=dash_style),
+                                opacity=0.65,
+                                showlegend=False,
+                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bear: %{{y:.2f}}<extra></extra>",
+                            )
+                        )
                 if (
                     orb_delta is not None
                     and chart_tf_value
