@@ -26,11 +26,15 @@ SESSION_PRESETS: Dict[str, List[str]] = {
 LOCAL_TZ = "Etc/GMT-4"
 LOCAL_TZ_LABEL = "UTC+4"
 
-SESSION_BUTTON_EMOJI = {
-    "asia": "🟦",
-    "europe": "🟧",
-    "us": "🟩",
-    "overnight": "🟪",
+SESSION_LABEL_MARKUP = {
+    "asia": ":blue[ASIA]",
+    "europe": ":orange[EUROPE]",
+    "us": ":green[US]",
+    "overnight": ":violet[OVERNIGHT]",
+}
+VOLUME_LABEL_MARKUP = {
+    "buy": ":green[BUY]",
+    "sell": ":red[SELL]",
 }
 
 
@@ -276,19 +280,31 @@ session_visibility: Dict[str, bool] = {
 ordered_sessions = [name for name in SESSION_NAMES if name in selected_sessions]
 toggle_cols = st.columns(len(ordered_sessions) + 2)
 for idx, name in enumerate(ordered_sessions):
-    label = f"{SESSION_BUTTON_EMOJI.get(name, '⬜')} {name.upper()}"
     key = f"session_toggle_{name}"
-    session_visibility[name] = toggle_cols[idx].toggle(label, value=session_visibility[name], key=key)
+    label = SESSION_LABEL_MARKUP.get(name, name.upper())
+    session_visibility[name] = toggle_cols[idx].checkbox(
+        label,
+        value=session_visibility[name],
+        key=key,
+    )
 
 buy_key = "volume_toggle_buy"
 if buy_key not in st.session_state:
     st.session_state[buy_key] = False
-show_buy_volume = toggle_cols[-2].toggle("🟩 BUY", value=st.session_state[buy_key], key=buy_key)
+show_buy_volume = toggle_cols[-2].checkbox(
+    VOLUME_LABEL_MARKUP["buy"],
+    value=st.session_state[buy_key],
+    key=buy_key,
+)
 
 sell_key = "volume_toggle_sell"
 if sell_key not in st.session_state:
     st.session_state[sell_key] = False
-show_sell_volume = toggle_cols[-1].toggle("🟥 SELL", value=st.session_state[sell_key], key=sell_key)
+show_sell_volume = toggle_cols[-1].checkbox(
+    VOLUME_LABEL_MARKUP["sell"],
+    value=st.session_state[sell_key],
+    key=sell_key,
+)
 
 caption_sessions = ", ".join(s.upper() for s in selected_sessions)
 focus_start = current_date
