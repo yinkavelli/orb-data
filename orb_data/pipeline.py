@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
@@ -20,6 +21,9 @@ from .orb_levels import (
 LOCAL_TIMEZONE = "Etc/GMT-4"
 
 
+_TIMEFRAME_PATTERN = re.compile(r"^(\d+)([mhdw])$")
+
+
 def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty or not {"high", "low"}.issubset(frame.columns):
         return frame
@@ -37,19 +41,34 @@ def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
 
     enriched["__day"] = idx_local.normalize()
     daily = enriched.groupby("__day", sort=True).agg({"high": "max", "low": "min"})
+    daily = daily.sort_index()
+
     prev_daily = daily.shift(1).rename(
         columns={"high": "prev_day_high", "low": "prev_day_low"}
     )
-    enriched = enriched.join(prev_daily, on="__day")
 
-    enriched["__week"] = idx_local.to_period("W")
-    weekly = enriched.groupby("__week", sort=True).agg({"high": "max", "low": "min"})
+    week_period = daily.index.to_period("W")
+    weekly = daily.groupby(week_period, sort=True).agg({"high": "max", "low": "min"})
+    weekly = weekly.sort_index()
     prev_weekly = weekly.shift(1).rename(
         columns={"high": "prev_week_high", "low": "prev_week_low"}
     )
-    enriched = enriched.join(prev_weekly, on="__week")
+    weekly_for_days = prev_weekly.reindex(week_period)
+    if weekly_for_days is not None:
+        weekly_for_days.index = daily.index
+        daily = daily.join(weekly_for_days)
 
-    return enriched.drop(columns=["__day", "__week"])
+    daily = daily.join(prev_daily)
+
+    join_cols = daily[[
+        "prev_day_high",
+        "prev_day_low",
+        "prev_week_high",
+        "prev_week_low",
+    ]]
+
+    result = enriched.join(join_cols, on="__day")
+    return result.drop(columns=["__day"])
 
 
 def _coerce_datetime(value: datetime | str) -> datetime:
@@ -112,6 +131,25 @@ def _session_active_mask(index: pd.Index, session: SessionConfig) -> pd.Series:
     return pd.Series(mask, index=index)
 
 
+def _timeframe_to_timedelta(value: str | None) -> pd.Timedelta:
+    if not value:
+        return pd.Timedelta(minutes=1)
+    match = _TIMEFRAME_PATTERN.match(value.strip())
+    if not match:
+        return pd.Timedelta(minutes=1)
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if unit == "m":
+        return pd.Timedelta(minutes=amount)
+    if unit == "h":
+        return pd.Timedelta(hours=amount)
+    if unit == "d":
+        return pd.Timedelta(days=amount)
+    if unit == "w":
+        return pd.Timedelta(weeks=amount)
+    return pd.Timedelta(minutes=1)
+
+
 @dataclass
 class OrbDataPipeline:
     symbols: Sequence[str]
@@ -148,11 +186,18 @@ class OrbDataPipeline:
         frames: list[pd.DataFrame] = []
         symbols: list[str] = []
 
+        chart_delta = _timeframe_to_timedelta(self.chart_timeframe)
+        orb_delta = _timeframe_to_timedelta(self.orb_timeframe)
+        base_delta = chart_delta if chart_delta >= orb_delta else orb_delta
+        percentile_buffer = base_delta * max(self.volume_percentile_window, 1)
+        lookback = max(pd.Timedelta(days=7), percentile_buffer)
+        fetch_since = self.start_dt - lookback
+
         for symbol in self.symbols:
             price_raw = self.client.fetch_ohlcv(
                 symbol,
                 self.chart_timeframe,
-                since=self.start_dt,
+                since=fetch_since,
                 until=self.end_dt,
             )
             if price_raw.empty:
@@ -164,7 +209,7 @@ class OrbDataPipeline:
                 orb_raw = self.client.fetch_ohlcv(
                     symbol,
                     self.orb_timeframe,
-                    since=self.start_dt,
+                    since=fetch_since,
                     until=self.end_dt,
                 )
 
@@ -248,6 +293,9 @@ class OrbDataPipeline:
             price_df["symbol"] = symbol
             price_df["orb_base_timeframe"] = self.orb_timeframe
             price_df = _add_previous_extrema(price_df)
+            price_df = price_df[price_df.index >= self.start_dt]
+            if self.end_dt is not None:
+                price_df = price_df[price_df.index <= self.end_dt]
             frames.append(price_df)
             symbols.append(symbol)
 
