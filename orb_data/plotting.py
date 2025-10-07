@@ -1,287 +1,270 @@
 from __future__ import annotations
 
-import re
-from typing import Iterable, List, Tuple
+from dataclasses import dataclass
+from typing import List
 
+import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 
-SESSION_COLOR_MAP = {
-    "asia": "#1f77b4",
-    "europe": "#ff7f0e",
-    "us": "#2ca02c",
-    "overnight": "#9467bd",
+
+@dataclass(frozen=True)
+class CandlePatternThresholds:
+    doji_body_ratio: float = 0.1
+    spinning_top_body_ratio: float = 0.3
+    spinning_top_wick_ratio: float = 0.3
+    marubozu_body_ratio: float = 0.9
+    marubozu_wick_ratio: float = 0.05
+    hammer_wick_ratio: float = 0.6
+    hammer_body_ratio: float = 0.4
+    hammer_upper_limit: float = 0.1
+    inverted_hammer_wick_ratio: float = 0.6
+    inverted_hammer_body_ratio: float = 0.4
+    inverted_hammer_lower_limit: float = 0.1
+    shooting_star_upper_ratio: float = 0.6
+    shooting_star_lower_limit: float = 0.1
+    shooting_star_body_ratio: float = 0.4
+
+
+PATTERN_THRESHOLDS = CandlePatternThresholds()
+
+
+def _safe_division(numerator: pd.Series, denominator: pd.Series) -> pd.Series:
+    denom = denominator.replace(0, np.nan)
+    result = numerator / denom
+    return result.replace([np.inf, -np.inf], np.nan)
+
+
+def add_candle_statistics(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or not {"open", "high", "low", "close"}.issubset(frame.columns):
+        return frame
+
+    stats = frame.copy()
+    stats["candle_range"] = stats["high"] - stats["low"]
+    stats["candle_body"] = (stats["close"] - stats["open"]).abs()
+    stats["candle_direction"] = np.where(stats["close"] >= stats["open"], 1, -1)
+    stats["body_ratio"] = _safe_division(stats["candle_body"], stats["candle_range"])
+
+    upper_wick = stats["high"] - stats[["open", "close"]].max(axis=1)
+    lower_wick = stats[["open", "close"]].min(axis=1) - stats["low"]
+    stats["upper_wick"] = upper_wick
+    stats["lower_wick"] = lower_wick
+    stats["upper_wick_ratio"] = _safe_division(upper_wick, stats["candle_range"])
+    stats["lower_wick_ratio"] = _safe_division(lower_wick, stats["candle_range"])
+
+    stats["close_position_ratio"] = _safe_division(stats["close"] - stats["low"], stats["candle_range"])
+    stats["open_position_ratio"] = _safe_division(stats["open"] - stats["low"], stats["candle_range"])
+
+    thresholds = PATTERN_THRESHOLDS
+
+    stats["is_doji"] = stats["body_ratio"] <= thresholds.doji_body_ratio
+    stats["is_spinning_top"] = (
+        (stats["body_ratio"] <= thresholds.spinning_top_body_ratio)
+        & (stats["upper_wick_ratio"] >= thresholds.spinning_top_wick_ratio)
+        & (stats["lower_wick_ratio"] >= thresholds.spinning_top_wick_ratio)
+    )
+    stats["is_long_legged_doji"] = stats["is_doji"] & (
+        (stats["upper_wick_ratio"] >= thresholds.spinning_top_wick_ratio)
+        & (stats["lower_wick_ratio"] >= thresholds.spinning_top_wick_ratio)
+    )
+    stats["is_marubozu"] = (
+        (stats["body_ratio"] >= thresholds.marubozu_body_ratio)
+        & (stats["upper_wick_ratio"] <= thresholds.marubozu_wick_ratio)
+        & (stats["lower_wick_ratio"] <= thresholds.marubozu_wick_ratio)
+    )
+
+    stats["is_hammer"] = (
+        (stats["lower_wick_ratio"] >= thresholds.hammer_wick_ratio)
+        & (stats["upper_wick_ratio"] <= thresholds.hammer_upper_limit)
+        & (stats["body_ratio"] <= thresholds.hammer_body_ratio)
+        & (stats["close_position_ratio"] >= 0.6)
+    )
+    stats["is_inverted_hammer"] = (
+        (stats["upper_wick_ratio"] >= thresholds.inverted_hammer_wick_ratio)
+        & (stats["lower_wick_ratio"] <= thresholds.inverted_hammer_lower_limit)
+        & (stats["body_ratio"] <= thresholds.inverted_hammer_body_ratio)
+        & (stats["open_position_ratio"] <= 0.4)
+    )
+    stats["is_shooting_star"] = (
+        (stats["upper_wick_ratio"] >= thresholds.shooting_star_upper_ratio)
+        & (stats["lower_wick_ratio"] <= thresholds.shooting_star_lower_limit)
+        & (stats["body_ratio"] <= thresholds.shooting_star_body_ratio)
+        & (stats["close_position_ratio"] <= 0.4)
+    )
+
+    for column in (
+        "is_doji",
+        "is_spinning_top",
+        "is_long_legged_doji",
+        "is_marubozu",
+        "is_hammer",
+        "is_inverted_hammer",
+        "is_shooting_star",
+    ):
+        stats[column] = stats[column].fillna(False)
+
+    return stats
+
+
+VOLUME_BIN_LABELS = {
+    3: ["Low Volume", "Average Volume", "High Volume"],
+    5: [
+        "Very Low Volume",
+        "Low Volume",
+        "Average Volume",
+        "High Volume",
+        "Very High Volume",
+    ],
 }
 
-_TIMEFRAME_PATTERN = re.compile(r"^(\d+)([mhd])$")
+SPREAD_BIN_LABELS = {
+    3: ["Narrow Spread", "Average Spread", "Wide Spread"],
+    5: [
+        "Very Narrow Spread",
+        "Narrow Spread",
+        "Average Spread",
+        "Wide Spread",
+        "Very Wide Spread",
+    ],
+}
+
+VOLUME_SPREAD_COLOR_3 = {
+    ("High Volume", "Wide Spread"): "#1E88E5",
+    ("High Volume", "Narrow Spread"): "#FFFFFF",
+    ("Low Volume", "Wide Spread"): "#FB8C00",
+    ("Low Volume", "Narrow Spread"): "#FFEB3B",
+}
+
+DEFAULT_COLOR_3 = "#B0BEC5"
+
+VOLUME_SPREAD_COLOR_5 = {
+    "Very Low Volume": {
+        "Very Narrow Spread": "#DDEFFD",
+        "Narrow Spread": "#9ED1F9",
+        "Average Spread": "#64B5F6",
+        "Wide Spread": "#2A99F3",
+        "Very Wide Spread": "#0C78CF",
+    },
+    "Low Volume": {
+        "Very Narrow Spread": "#6EDED3",
+        "Narrow Spread": "#38D1C3",
+        "Average Spread": "#26A69A",
+        "Wide Spread": "#1B746C",
+        "Very Wide Spread": "#0E3E3A",
+    },
+    "Average Volume": {
+        "Very Narrow Spread": "#FAFAFB",
+        "Narrow Spread": "#D3DBDF",
+        "Average Spread": "#B0BEC5",
+        "Wide Spread": "#8DA1AB",
+        "Very Wide Spread": "#68818E",
+    },
+    "High Volume": {
+        "Very Narrow Spread": "#FFDBA5",
+        "Narrow Spread": "#FFC063",
+        "Average Spread": "#FFA726",
+        "Wide Spread": "#E88A00",
+        "Very Wide Spread": "#A56200",
+    },
+    "Very High Volume": {
+        "Very Narrow Spread": "#F5C6FA",
+        "Narrow Spread": "#E58AF2",
+        "Average Spread": "#D05CE6",
+        "Wide Spread": "#B13AC7",
+        "Very Wide Spread": "#7F2A90",
+    },
+}
+
+DEFAULT_COLOR_5 = "#90A4AE"
 
 
-def _timeframe_to_timedelta(value: str | None) -> pd.Timedelta | None:
-    if not value:
-        return None
-    match = _TIMEFRAME_PATTERN.match(value.strip())
-    if not match:
-        return None
-    amount = int(match.group(1))
-    unit = match.group(2)
-    if unit == "m":
-        return pd.Timedelta(minutes=amount)
-    if unit == "h":
-        return pd.Timedelta(hours=amount)
-    if unit == "d":
-        return pd.Timedelta(days=amount)
-    return None
+def _rolling_percentile(series: pd.Series, window: int) -> pd.Series:
+    if window <= 0:
+        raise ValueError("window must be positive")
+
+    def percentile(values: np.ndarray) -> float:
+        if len(values) == 0:
+            return np.nan
+        current = values[-1]
+        if not np.isfinite(current):
+            return np.nan
+        less = np.sum(values < current)
+        equal = np.sum(values == current)
+        return (less + 0.5 * equal) / len(values)
+
+    return series.rolling(window=window, min_periods=window).apply(percentile, raw=True)
 
 
-def _hex_to_rgba(hex_color: str, alpha: float) -> str:
-    hex_color = hex_color.lstrip("#")
-    if len(hex_color) != 6:
-        return f"rgba(33, 150, 243, {alpha})"
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    return f"rgba({r}, {g}, {b}, {alpha})"
+def _assign_bins(percentile: pd.Series, bins: int, labels: List[str]) -> pd.Series:
+    if labels is None:
+        raise ValueError(f"Unsupported bin configuration for {bins} bins")
+    if bins == 3:
+        thresholds = [1 / 3, 2 / 3]
+    elif bins == 5:
+        thresholds = [0.2, 0.4, 0.6, 0.8]
+    else:
+        raise ValueError(f"Unsupported bin count: {bins}")
+
+    result = pd.Series(pd.NA, index=percentile.index, dtype="object")
+    valid = percentile.notna()
+    values = percentile[valid].clip(lower=0.0, upper=1.0)
+    bin_indices = np.digitize(values, thresholds, right=False)
+    bin_indices = np.clip(bin_indices, 0, len(labels) - 1)
+    mapped = [labels[idx] for idx in bin_indices]
+    result.loc[valid] = mapped
+    return result
 
 
-def _ensure_datetime_index(frame: pd.DataFrame) -> pd.DataFrame:
-    if isinstance(frame.index, pd.MultiIndex):
-        if "time" in frame.index.names:
-            frame = frame.droplevel([name for name in frame.index.names if name != "time"])
-        else:
-            frame = frame.copy()
-            frame.index = frame.index.get_level_values(-1)
-    if not isinstance(frame.index, pd.DatetimeIndex):
-        frame = frame.copy()
-        frame.index = pd.to_datetime(frame.index, utc=True)
-    return frame
+def add_volume_spread_bins(frame: pd.DataFrame, window: int, bins: int) -> pd.DataFrame:
+    if frame.empty:
+        return frame
 
+    enriched = frame.copy()
+    if "volume" in enriched.columns:
+        vol_pct = _rolling_percentile(enriched["volume"], window)
+        enriched["volume_percentile"] = vol_pct
+        vol_labels = VOLUME_BIN_LABELS.get(bins)
+        enriched["volume_bin"] = _assign_bins(vol_pct, bins, vol_labels)
 
-def _select_symbol_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    if isinstance(frame.index, pd.MultiIndex) and "symbol" in frame.index.names:
-        try:
-            return frame.xs(symbol, level="symbol")
-        except KeyError:
-            return frame.loc[(symbol, slice(None))]
-    if "symbol" in frame.columns:
-        return frame[frame["symbol"] == symbol]
-    return frame
+    if "candle_range" not in enriched.columns and {"high", "low"}.issubset(enriched.columns):
+        enriched["candle_range"] = enriched["high"] - enriched["low"]
 
+    if "candle_range" in enriched.columns:
+        spread_pct = _rolling_percentile(enriched["candle_range"], window)
+        enriched["spread_percentile"] = spread_pct
+        spread_labels = SPREAD_BIN_LABELS.get(bins)
+        enriched["spread_bin"] = _assign_bins(spread_pct, bins, spread_labels)
 
-def _session_color(name: str) -> str:
-    return SESSION_COLOR_MAP.get(name, "#1565c0")
+    if "volume_bin" in enriched.columns and "spread_bin" in enriched.columns:
+        volume_short = enriched["volume_bin"].astype("string").str.replace(" Volume", "", regex=False)
+        spread_short = enriched["spread_bin"].astype("string").str.replace(" Spread", "", regex=False)
+        combined = (volume_short.fillna("") + " | " + spread_short.fillna("")).str.strip(" |")
+        combined = combined.replace("", pd.NA)
+        enriched["volume_spread_profile"] = combined
 
+        def _resolve_color(vol_label: str | None, spread_label: str | None) -> str:
+            vol_label = vol_label or ""
+            spread_label = spread_label or ""
+            if bins == 3:
+                return VOLUME_SPREAD_COLOR_3.get((vol_label, spread_label), DEFAULT_COLOR_3)
+            vol_map = VOLUME_SPREAD_COLOR_5.get(vol_label)
+            if vol_map:
+                color = vol_map.get(spread_label)
+                if color:
+                    return color
+            return DEFAULT_COLOR_5
 
-def _iter_session_chunks(data: pd.DataFrame, session_name: str) -> Iterable[pd.DataFrame]:
-    sid_col = f"session_id_{session_name}"
-    if sid_col not in data.columns:
-        return []
-    return [chunk for key, chunk in data.groupby(sid_col, sort=False) if not pd.isna(key) and not chunk.empty]
-
-
-def make_orb_figure(
-    frame: pd.DataFrame,
-    *,
-    symbol: str,
-    title_prefix: str = "ORB",
-    timeframe: str | None = None,
-    show_sessions: bool = True,
-    sessions: list[str] | None = None,
-) -> go.Figure:
-    data = _select_symbol_frame(frame, symbol).copy()
-    if data.empty:
-        return go.Figure()
-
-    data = _ensure_datetime_index(data).sort_index()
-
-    fig = go.Figure()
-    fig.add_trace(
-        go.Candlestick(
-            x=data.index,
-            open=data["open"],
-            high=data["high"],
-            low=data["low"],
-            close=data["close"],
-            name="Price",
-            increasing_line_color="#2e7d32",
-            increasing_fillcolor="rgba(46, 125, 50, 0.55)",
-            decreasing_line_color="#c62828",
-            decreasing_fillcolor="rgba(198, 40, 40, 0.55)",
-            whiskerwidth=0.4,
-        )
-    )
-
-    if "ema_5" in data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=data.index,
-                y=data["ema_5"],
-                mode="lines",
-                name="EMA 5",
-                line=dict(color="#ff6f61", width=1.6),
-                hovertemplate="EMA 5: %{y:.2f}<extra></extra>",
-            )
-        )
-    if "ema_13" in data.columns:
-        fig.add_trace(
-            go.Scatter(
-                x=data.index,
-                y=data["ema_13"],
-                mode="lines",
-                name="EMA 13",
-                line=dict(color="#00acc1", width=1.4),
-                hovertemplate="EMA 13: %{y:.2f}<extra></extra>",
-            )
-        )
-
-    shading_windows: List[Tuple[pd.Timestamp, pd.Timestamp, str]] = []
-    orb_tf_value = None
-    if "orb_base_timeframe" in data.columns:
-        non_null = data["orb_base_timeframe"].dropna().unique()
-        if len(non_null):
-            orb_tf_value = str(non_null[0])
-    orb_delta = _timeframe_to_timedelta(orb_tf_value)
-    chart_tf_value = timeframe
-
-    sessions_seen = []
-    if show_sessions:
-        session_ids = [col for col in data.columns if col.startswith("session_id_")]
-        for sid in session_ids:
-            name = sid[len("session_id_"):]
-            if sessions is not None and name not in sessions:
-                continue
-            high_col = f"orb_high_{name}"
-            low_col = f"orb_low_{name}"
-            mid_col = f"orb_mid_{name}"
-            if high_col not in data.columns or low_col not in data.columns:
-                continue
-            base_color = _session_color(name)
-            sessions_seen.append((name, base_color))
-            show_leg = True
-            for chunk in _iter_session_chunks(data, name):
-                fig.add_trace(
-                    go.Scatter(
-                        x=chunk.index,
-                        y=chunk[high_col],
-                        mode="lines",
-                        name=f"{name.upper()} ORB",
-                        line=dict(color=base_color, width=1.6, dash="solid"),
-                        opacity=0.9,
-                        legendgroup=f"session_{name}",
-                        legendgrouptitle=dict(text=name.upper()) if show_leg else None,
-                        showlegend=show_leg,
-                        hovertemplate=f"{name.upper()} High: %{{y:.2f}}<extra></extra>",
-                    )
-                )
-                fig.add_trace(
-                    go.Scatter(
-                        x=chunk.index,
-                        y=chunk[low_col],
-                        mode="lines",
-                        name=f"{name.upper()} ORB Low",
-                        line=dict(color=base_color, width=1.6, dash="solid"),
-                        opacity=0.65,
-                        legendgroup=f"session_{name}",
-                        showlegend=False,
-                        hovertemplate=f"{name.upper()} Low: %{{y:.2f}}<extra></extra>",
-                    )
-                )
-                if mid_col in chunk.columns:
-                    fig.add_trace(
-                        go.Scatter(
-                            x=chunk.index,
-                            y=chunk[mid_col],
-                            mode="lines",
-                            name=f"{name.upper()} ORB Mid",
-                            line=dict(color=base_color, width=1.2, dash="dash"),
-                            opacity=0.65,
-                            legendgroup=f"session_{name}",
-                            showlegend=False,
-                            hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
-                        )
-                    )
-                for level_col, label_suffix, dash, opacity in (
-                    (f"L1_bull_{name}", "L1+", "dash", 0.55),
-                    (f"L2_bull_{name}", "L2+", "dot", 0.45),
-                    (f"L3_bull_{name}", "L3+", "dashdot", 0.35),
-                    (f"L1_bear_{name}", "L1-", "dash", 0.55),
-                    (f"L2_bear_{name}", "L2-", "dot", 0.45),
-                    (f"L3_bear_{name}", "L3-", "dashdot", 0.35),
-                ):
-                    if level_col in chunk.columns and chunk[level_col].notna().any():
-                        fig.add_trace(
-                            go.Scatter(
-                                x=chunk.index,
-                                y=chunk[level_col],
-                                mode="lines",
-                                name=f"{name.upper()} {label_suffix}",
-                                line=dict(color=base_color, width=1, dash=dash),
-                                opacity=opacity,
-                                legendgroup=f"session_{name}",
-                                showlegend=show_leg,
-                                hovertemplate=f"{name.upper()} {label_suffix}: %{{y:.2f}}<extra></extra>",
-                            )
-                        )
-                        show_leg = False
-                if (
-                    orb_delta is not None
-                    and chart_tf_value
-                    and orb_tf_value
-                    and orb_tf_value != chart_tf_value
-                ):
-                    is_orb_col = f"is_orb_{name}"
-                    if is_orb_col in chunk.columns:
-                        orb_rows = chunk.index[chunk[is_orb_col].fillna(False)]
-                        if len(orb_rows):
-                            start = orb_rows[0]
-                            end = start + orb_delta
-                            shading_windows.append((start, end, base_color))
-                show_leg = False
-
-    for left, right, color in shading_windows:
-        fig.add_vrect(
-            x0=left,
-            x1=right,
-            fillcolor=_hex_to_rgba(color, 0.2),
-            layer="below",
-            line_width=0,
+        enriched["volume_spread_color"] = enriched.apply(
+            lambda row: _resolve_color(row.get("volume_bin"), row.get("spread_bin"))
+            if pd.notna(row.get("volume_bin")) and pd.notna(row.get("spread_bin"))
+            else (DEFAULT_COLOR_3 if bins == 3 else DEFAULT_COLOR_5),
+            axis=1,
         )
 
-    title = f"{title_prefix}: {symbol}"
-    if timeframe:
-        title = f"{title_prefix}: {symbol} ({timeframe})"
-    fig.update_layout(
-        title=dict(text=title, font=dict(color="#212121", size=16)),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
-        font=dict(color="#1f1f1f", size=12),
-        xaxis=dict(
-            title=dict(text="Time", font=dict(color="#212121", size=12)),
-            showgrid=True,
-            gridcolor="#ececec",
-            gridwidth=1,
-            zeroline=False,
-            linecolor="#b0b0b0",
-            tickfont=dict(color="#424242"),
-            title_standoff=24,
-        ),
-        yaxis=dict(
-            title=dict(text="Price", font=dict(color="#212121", size=12)),
-            showgrid=True,
-            gridcolor="#ececec",
-            gridwidth=1,
-            zeroline=False,
-            linecolor="#b0b0b0",
-            tickfont=dict(color="#424242"),
-            title_standoff=24,
-        ),
-        margin=dict(t=70, l=60, r=160, b=110),
-        xaxis_rangeslider_visible=False,
-        hovermode="x unified",
-        legend=dict(
-            visible=False,
-        ),
-    )
-    return fig
+    return enriched
 
 
-__all__ = ["make_orb_figure"]
+__all__ = [
+    "add_candle_statistics",
+    "add_volume_spread_bins",
+    "PATTERN_THRESHOLDS",
+]

@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from orb_data import DEFAULT_SESSIONS, OrbDataPipeline
-from orb_data.plotting import make_orb_figure
+from orb_data.figure import make_orb_figure
 
 st.set_page_config(page_title="ORB Data Viewer", layout="wide")
 st.title("ORB Data Viewer")
@@ -25,6 +25,13 @@ SESSION_PRESETS: Dict[str, List[str]] = {
 }
 LOCAL_TZ = "Etc/GMT-4"
 LOCAL_TZ_LABEL = "UTC+4"
+
+SESSION_BUTTON_EMOJI = {
+    "asia": "🟦",
+    "europe": "🟧",
+    "us": "🟩",
+    "overnight": "🟪",
+}
 
 
 def _extract_symbol_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -171,23 +178,6 @@ if exchange_name:
     st.caption(f"Exchange source: ccxt.{exchange_name}")
 st.caption(f"Percentile window: {volume_window} | Bins: {percentile_bins}")
 
-session_cols = [col for col in frame.columns if col.startswith("session_id_")]
-if session_cols:
-    session_names = [col.replace("session_id_", "") for col in session_cols]
-    color_map = {
-        "asia": "#1f77b4",
-        "europe": "#ff7f0e",
-        "us": "#2ca02c",
-        "overnight": "#9467bd",
-    }
-    cards = st.columns(len(session_names))
-    for col, name in zip(cards, session_names):
-        with col:
-            st.markdown(
-                f"<div style='background:{color_map.get(name, '#cccccc')}; color:white; padding:6px 10px; border-radius:6px; font-size:0.75rem; text-align:center;'>"
-                f"{name.upper()}" "</div>",
-                unsafe_allow_html=True,
-            )
 symbol_df = _extract_symbol_frame(frame, symbol_choice)
 if symbol_df.empty:
     st.warning("No data available for the selected symbol.")
@@ -269,6 +259,26 @@ else:
     if not selected_sessions:
         selected_sessions = SESSION_NAMES.copy()
 
+session_visibility: Dict[str, bool] = {
+    name: st.session_state.get(f"session_toggle_{name}", True) for name in SESSION_NAMES
+}
+ordered_sessions = [name for name in SESSION_NAMES if name in selected_sessions]
+toggle_cols = st.columns(len(ordered_sessions) + 2)
+for idx, name in enumerate(ordered_sessions):
+    label = f"{SESSION_BUTTON_EMOJI.get(name, '⬜')} {name.upper()}"
+    key = f"session_toggle_{name}"
+    session_visibility[name] = toggle_cols[idx].toggle(label, value=session_visibility[name], key=key)
+
+buy_key = "volume_toggle_buy"
+if buy_key not in st.session_state:
+    st.session_state[buy_key] = False
+show_buy_volume = toggle_cols[-2].toggle("🟩 BUY", value=st.session_state[buy_key], key=buy_key)
+
+sell_key = "volume_toggle_sell"
+if sell_key not in st.session_state:
+    st.session_state[sell_key] = False
+show_sell_volume = toggle_cols[-1].toggle("🟥 SELL", value=st.session_state[sell_key], key=sell_key)
+
 start_ts = current_date
 end_ts = current_date + pd.Timedelta(days=1)
 mask = (local_series >= start_ts) & (local_series < end_ts)
@@ -294,42 +304,24 @@ fig = make_orb_figure(
     timeframe=chart_tf,
     title_prefix="ORB Levels",
     sessions=selected_sessions,
+    x_range=(plot_df.index.min(), plot_df.index.max()),
+    session_visibility=session_visibility,
+    show_buy_volume=show_buy_volume,
+    show_sell_volume=show_sell_volume,
 )
 caption_day = current_date.strftime("%Y-%m-%d")
 caption_sessions = ", ".join(s.upper() for s in selected_sessions)
 st.caption(f"Day: {caption_day} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}")
 st.plotly_chart(fig, use_container_width=True)
 
-st.markdown("<h4 style='text-align:center;'>Filtered rows (latest 10)</h4>", unsafe_allow_html=True)
-table_df = day_df.copy()
-local_col = f"time_{LOCAL_TZ_LABEL}"
-table_df.insert(0, local_col, table_df["time_utc_plus4"].dt.strftime("%Y-%m-%d %H:%M"))
-if "time_utc" in table_df.columns:
-    table_df["time_utc"] = table_df["time_utc"].dt.strftime("%Y-%m-%d %H:%M")
-preferred_order = [
-    local_col,
-    "time_utc",
-    "open",
-    "high",
-    "low",
-    "close",
-    "volume",
-    "volume_usdt",
-    "symbol",
-]
-ordered_cols = [col for col in preferred_order if col in table_df.columns]
-ordered_cols += [col for col in table_df.columns if col not in ordered_cols]
-st.dataframe(table_df[ordered_cols].tail(10), use_container_width=True)
-
-csv_bytes = day_df.to_csv().encode()
-btn_cols = st.columns([1, 1, 1])
-with btn_cols[1]:
-    st.download_button(
-        "Download visible slice",
-        data=csv_bytes,
-        file_name=f"orb_{symbol_choice.replace('/', '_')}_{caption_day}.csv",
-        mime="text/csv",
-    )
-
 with st.expander("Full pipeline output (first 200 rows)", expanded=False):
     st.dataframe(frame.head(200), use_container_width=True)
+
+full_csv_bytes = frame.to_csv().encode()
+st.download_button(
+    "Download full dataset",
+    data=full_csv_bytes,
+    file_name=f"orb_full_{chart_tf.replace('/', '-')}.csv",
+    mime="text/csv",
+    use_container_width=True,
+)

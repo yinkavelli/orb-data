@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Sequence
@@ -19,6 +18,7 @@ from .orb_levels import (
 
 
 LOCAL_TIMEZONE = "Etc/GMT-4"
+
 
 def _coerce_datetime(value: datetime | str) -> datetime:
     if isinstance(value, datetime):
@@ -55,16 +55,16 @@ def _prepare_price_df(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _parse_hhmm(value: str) -> pd.Timedelta:
-    hours, minutes = map(int, value.split(':'))
+    hours, minutes = map(int, value.split(":"))
     return pd.Timedelta(hours=hours, minutes=minutes)
 
 
 def _session_active_mask(index: pd.Index, session: SessionConfig) -> pd.Series:
     idx = pd.DatetimeIndex(index)
     if idx.tz is None:
-        idx = idx.tz_localize('UTC')
+        idx = idx.tz_localize("UTC")
     else:
-        idx = idx.tz_convert('UTC')
+        idx = idx.tz_convert("UTC")
 
     base = idx.normalize()
     start_offset = _parse_hhmm(session.start_utc)
@@ -74,15 +74,14 @@ def _session_active_mask(index: pd.Index, session: SessionConfig) -> pd.Series:
     session_end = base + end_offset
     wraps = session_end <= session_start
     if wraps.any():
-        session_end = session_end + pd.to_timedelta(wraps.astype(int), unit='D')
+        session_end = session_end + pd.to_timedelta(wraps.astype(int), unit="D")
 
     mask = (idx >= session_start) & (idx < session_end)
     return pd.Series(mask, index=index)
 
+
 @dataclass
 class OrbDataPipeline:
-    """Fetch OHLCV data and attach daily/session ORB levels."""
-
     symbols: Sequence[str]
     chart_timeframe: str
     start: datetime | str
@@ -192,6 +191,19 @@ class OrbDataPipeline:
                 price_df["ema_5"] = price_df["close"].ewm(span=5, adjust=False).mean()
                 price_df["ema_13"] = price_df["close"].ewm(span=13, adjust=False).mean()
 
+            if "volume" in price_df.columns:
+                buy_volume = price_df.get(
+                    "taker_buy_base_vol",
+                    pd.Series(0.0, index=price_df.index, dtype=float),
+                ).astype(float).fillna(0.0)
+                price_df["volume_buy"] = buy_volume
+                price_df["volume_sell"] = (price_df["volume"] - buy_volume).clip(lower=0.0)
+                total_vol = price_df["volume"].replace(0, np.nan)
+                price_df["volume_delta"] = price_df["volume_buy"] - price_df["volume_sell"]
+                price_df["volume_buy_share"] = (price_df["volume_buy"] / total_vol).clip(upper=1.0)
+                price_df["volume_sell_share"] = (price_df["volume_sell"] / total_vol).clip(upper=1.0)
+                price_df[["volume_buy_share", "volume_sell_share"]] = price_df[["volume_buy_share", "volume_sell_share"]].fillna(0.0)
+
             index_utc = price_df.index
             if getattr(index_utc, "tz", None) is None:
                 index_utc = pd.DatetimeIndex(index_utc, tz="UTC")
@@ -218,4 +230,3 @@ class OrbDataPipeline:
 
 
 __all__ = ["OrbDataPipeline"]
-

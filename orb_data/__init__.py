@@ -7,7 +7,7 @@ from .orb_levels import (
     annotate_session_orb,
 )
 from .pipeline import OrbDataPipeline
-from .plotting import make_orb_figure
+from .figure import make_orb_figure
 
 __all__ = [
     "BinanceClient",

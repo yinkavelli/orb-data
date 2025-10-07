@@ -127,6 +127,55 @@ SPREAD_BIN_LABELS = {
     ],
 }
 
+VOLUME_SPREAD_COLOR_3 = {
+    ("High Volume", "Wide Spread"): "#1E88E5",
+    ("High Volume", "Narrow Spread"): "#FFFFFF",
+    ("Low Volume", "Wide Spread"): "#FB8C00",
+    ("Low Volume", "Narrow Spread"): "#FFEB3B",
+}
+
+DEFAULT_COLOR_3 = "#B0BEC5"
+
+VOLUME_SPREAD_COLOR_5 = {
+    "Very Low Volume": {
+        "Very Narrow Spread": "#DDEFFD",
+        "Narrow Spread": "#9ED1F9",
+        "Average Spread": "#64B5F6",
+        "Wide Spread": "#2A99F3",
+        "Very Wide Spread": "#0C78CF",
+    },
+    "Low Volume": {
+        "Very Narrow Spread": "#6EDED3",
+        "Narrow Spread": "#38D1C3",
+        "Average Spread": "#26A69A",
+        "Wide Spread": "#1B746C",
+        "Very Wide Spread": "#0E3E3A",
+    },
+    "Average Volume": {
+        "Very Narrow Spread": "#FAFAFB",
+        "Narrow Spread": "#D3DBDF",
+        "Average Spread": "#B0BEC5",
+        "Wide Spread": "#8DA1AB",
+        "Very Wide Spread": "#68818E",
+    },
+    "High Volume": {
+        "Very Narrow Spread": "#FFDBA5",
+        "Narrow Spread": "#FFC063",
+        "Average Spread": "#FFA726",
+        "Wide Spread": "#E88A00",
+        "Very Wide Spread": "#A56200",
+    },
+    "Very High Volume": {
+        "Very Narrow Spread": "#F5C6FA",
+        "Narrow Spread": "#E58AF2",
+        "Average Spread": "#D05CE6",
+        "Wide Spread": "#B13AC7",
+        "Very Wide Spread": "#7F2A90",
+    },
+}
+
+DEFAULT_COLOR_5 = "#90A4AE"
+
 
 def _rolling_percentile(series: pd.Series, window: int) -> pd.Series:
     if window <= 0:
@@ -149,7 +198,7 @@ def _assign_bins(percentile: pd.Series, bins: int, labels: List[str]) -> pd.Seri
     if labels is None:
         raise ValueError(f"Unsupported bin configuration for {bins} bins")
     if bins == 3:
-        thresholds = [1/3, 2/3]
+        thresholds = [1 / 3, 2 / 3]
     elif bins == 5:
         thresholds = [0.2, 0.4, 0.6, 0.8]
     else:
@@ -186,11 +235,41 @@ def add_volume_spread_bins(frame: pd.DataFrame, window: int, bins: int) -> pd.Da
         enriched["spread_bin"] = _assign_bins(spread_pct, bins, spread_labels)
 
     if "volume_bin" in enriched.columns and "spread_bin" in enriched.columns:
-        volume_short = enriched["volume_bin"].astype("string").str.replace(" Volume", "", regex=False)
-        spread_short = enriched["spread_bin"].astype("string").str.replace(" Spread", "", regex=False)
-        combined = (volume_short.fillna("") + " " + spread_short.fillna("")).str.strip()
-        combined = combined.replace("", pd.NA)
-        enriched["volume_spread_profile"] = combined
+        volume_labels = enriched["volume_bin"].astype("string")
+        spread_labels = enriched["spread_bin"].astype("string")
+
+        combined = pd.Series(pd.NA, index=enriched.index, dtype="string")
+        volume_only = volume_labels.notna() & spread_labels.isna()
+        spread_only = spread_labels.notna() & volume_labels.isna()
+        both = volume_labels.notna() & spread_labels.notna()
+
+        combined.loc[both] = (
+            volume_labels.loc[both].str.strip()
+            + " | "
+            + spread_labels.loc[both].str.strip()
+        )
+        combined.loc[volume_only] = volume_labels.loc[volume_only].str.strip()
+        combined.loc[spread_only] = spread_labels.loc[spread_only].str.strip()
+        enriched["volume_spread_profile"] = combined.replace("", pd.NA)
+
+        def _resolve_color(vol_label: str | None, spread_label: str | None) -> str:
+            vol_label = vol_label or ""
+            spread_label = spread_label or ""
+            if bins == 3:
+                return VOLUME_SPREAD_COLOR_3.get((vol_label, spread_label), DEFAULT_COLOR_3)
+            vol_map = VOLUME_SPREAD_COLOR_5.get(vol_label)
+            if vol_map:
+                color = vol_map.get(spread_label)
+                if color:
+                    return color
+            return DEFAULT_COLOR_5
+
+        enriched["volume_spread_color"] = enriched.apply(
+            lambda row: _resolve_color(row.get("volume_bin"), row.get("spread_bin"))
+            if pd.notna(row.get("volume_bin")) and pd.notna(row.get("spread_bin"))
+            else (DEFAULT_COLOR_3 if bins == 3 else DEFAULT_COLOR_5),
+            axis=1,
+        )
 
     return enriched
 
