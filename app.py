@@ -295,58 +295,41 @@ focus_start = current_date
 focus_end = current_date + pd.Timedelta(days=1)
 x_range = (focus_start, focus_end)
 
+mask = (local_series >= focus_start) & (local_series < focus_end)
+filtered_df = symbol_df.loc[mask].copy()
+
+if not filtered_df.empty and selected_sessions != SESSION_NAMES:
+    session_cols = [
+        f"session_id_{name}"
+        for name in selected_sessions
+        if f"session_id_{name}" in filtered_df.columns
+    ]
+    if session_cols:
+        session_mask = pd.Series(False, index=filtered_df.index)
+        for col in session_cols:
+            session_mask |= filtered_df[col].notna()
+        filtered_df = filtered_df.loc[session_mask]
+
+if filtered_df.empty:
+    st.warning("No candles match the selected day/session filters.")
+    st.stop()
+
+filtered_df.sort_values("time_utc_plus4", inplace=True)
+plot_df = filtered_df.set_index("time_utc_plus4")
+
+caption_day = current_date.strftime("%Y-%m-%d")
 if view_mode == "Daily":
-    start_ts = current_date
-    end_ts = current_date + pd.Timedelta(days=1)
-    mask = (local_series >= start_ts) & (local_series < end_ts)
-    filtered_df = symbol_df.loc[mask].copy()
-
-    if not filtered_df.empty and selected_sessions != SESSION_NAMES:
-        session_cols = [
-            f"session_id_{name}"
-            for name in selected_sessions
-            if f"session_id_{name}" in filtered_df.columns
-        ]
-        if session_cols:
-            session_mask = pd.Series(False, index=filtered_df.index)
-            for col in session_cols:
-                session_mask |= filtered_df[col].notna()
-            filtered_df = filtered_df.loc[session_mask]
-
-    if filtered_df.empty:
-        st.warning("No candles match the selected day/session filters.")
-        st.stop()
-
-    filtered_df.sort_values("time_utc_plus4", inplace=True)
-    plot_df = filtered_df.set_index("time_utc_plus4")
-    caption_day = current_date.strftime("%Y-%m-%d")
     caption_text = f"Day: {caption_day} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}"
 else:
-    filtered_df = symbol_df.copy()
-    if selected_sessions != SESSION_NAMES:
-        session_cols = [
-            f"session_id_{name}"
-            for name in selected_sessions
-            if f"session_id_{name}" in filtered_df.columns
-        ]
-        if session_cols:
-            session_mask = pd.Series(False, index=filtered_df.index)
-            for col in session_cols:
-                session_mask |= filtered_df[col].notna()
-            filtered_df = filtered_df.loc[session_mask]
-
-    if filtered_df.empty:
-        st.warning("No candles match the selected session filters.")
-        st.stop()
-
-    filtered_df.sort_values("time_utc_plus4", inplace=True)
-    plot_df = filtered_df.set_index("time_utc_plus4")
-    start_label = plot_df.index.min().strftime("%Y-%m-%d %H:%M")
-    end_label = plot_df.index.max().strftime("%Y-%m-%d %H:%M")
-    focus_label = current_date.strftime("%Y-%m-%d")
-    caption_text = (
-        f"Continuous: {start_label} → {end_label} {LOCAL_TZ_LABEL} | Focus day: {focus_label} | Sessions: {caption_sessions}"
-    )
+    full_start = symbol_df["time_utc_plus4"].min()
+    full_end = symbol_df["time_utc_plus4"].max()
+    if pd.isna(full_start) or pd.isna(full_end):
+        caption_text = f"Focus day: {caption_day} | Sessions: {caption_sessions}"
+    else:
+        caption_text = (
+            f"Continuous range: {full_start.strftime('%Y-%m-%d %H:%M')} → "
+            f"{full_end.strftime('%Y-%m-%d %H:%M')} {LOCAL_TZ_LABEL} | Focus day: {caption_day} | Sessions: {caption_sessions}"
+        )
 
 fig = make_orb_figure(
     plot_df,
