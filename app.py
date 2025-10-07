@@ -199,16 +199,16 @@ if symbol_choice not in st.session_state[date_state_key] or st.session_state[dat
 index_lookup = {ts: idx for idx, ts in enumerate(available_dates)}
 view_mode = st.radio(
     "Chart mode",
-    ["Daily", "Continuous"],
+    ["Continuous", "Daily"],
     horizontal=True,
     key="orb_view_mode",
 )
 
-current_date = None
+current_date = st.session_state[date_state_key][symbol_choice]
+current_idx = index_lookup[current_date]
+
 if view_mode == "Daily":
-    current_date = st.session_state[date_state_key][symbol_choice]
     session_picker_key = f"date_picker_{symbol_choice}"
-    current_idx = index_lookup[current_date]
     picked = st.selectbox(
         f"Session day ({LOCAL_TZ_LABEL})",
         options=available_dates,
@@ -219,27 +219,30 @@ if view_mode == "Daily":
     if picked != current_date:
         st.session_state[date_state_key][symbol_choice] = picked
         current_date = picked
+        current_idx = index_lookup[current_date]
 
-    prev_col, next_col = st.columns([1, 1])
-    with prev_col:
-        disable_prev = index_lookup[current_date] == 0
-        if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
-            idx = index_lookup[current_date]
-            if idx > 0:
-                new_date = available_dates[idx - 1]
-                st.session_state[date_state_key][symbol_choice] = new_date
-                current_date = new_date
-    with next_col:
-        disable_next = index_lookup[current_date] == len(available_dates) - 1
-        if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
-            idx = index_lookup[current_date]
-            if idx < len(available_dates) - 1:
-                new_date = available_dates[idx + 1]
-                st.session_state[date_state_key][symbol_choice] = new_date
-                current_date = new_date
+prev_col, next_col = st.columns([1, 1])
+with prev_col:
+    disable_prev = index_lookup[current_date] == 0
+    if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
+        idx = index_lookup[current_date]
+        if idx > 0:
+            new_date = available_dates[idx - 1]
+            st.session_state[date_state_key][symbol_choice] = new_date
+            current_date = new_date
+            current_idx = index_lookup[current_date]
+with next_col:
+    disable_next = index_lookup[current_date] == len(available_dates) - 1
+    if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
+        idx = index_lookup[current_date]
+        if idx < len(available_dates) - 1:
+            new_date = available_dates[idx + 1]
+            st.session_state[date_state_key][symbol_choice] = new_date
+            current_date = new_date
+            current_idx = index_lookup[current_date]
 
-    current_date = st.session_state[date_state_key][symbol_choice]
-    current_idx = index_lookup[current_date]
+current_date = st.session_state[date_state_key][symbol_choice]
+current_idx = index_lookup[current_date]
 
 session_mode = st.radio("Session filter", ["All sessions", "Custom"], horizontal=True, key="session_mode")
 session_select_key = "session_multiselect"
@@ -288,6 +291,9 @@ if sell_key not in st.session_state:
 show_sell_volume = toggle_cols[-1].toggle("🟥 SELL", value=st.session_state[sell_key], key=sell_key)
 
 caption_sessions = ", ".join(s.upper() for s in selected_sessions)
+focus_start = current_date
+focus_end = current_date + pd.Timedelta(days=1)
+x_range = (focus_start, focus_end)
 
 if view_mode == "Daily":
     start_ts = current_date
@@ -337,8 +343,9 @@ else:
     plot_df = filtered_df.set_index("time_utc_plus4")
     start_label = plot_df.index.min().strftime("%Y-%m-%d %H:%M")
     end_label = plot_df.index.max().strftime("%Y-%m-%d %H:%M")
+    focus_label = current_date.strftime("%Y-%m-%d")
     caption_text = (
-        f"Range: {start_label} → {end_label} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}"
+        f"Continuous: {start_label} → {end_label} {LOCAL_TZ_LABEL} | Focus day: {focus_label} | Sessions: {caption_sessions}"
     )
 
 fig = make_orb_figure(
@@ -347,7 +354,7 @@ fig = make_orb_figure(
     timeframe=chart_tf,
     title_prefix="ORB Levels",
     sessions=selected_sessions,
-    x_range=(plot_df.index.min(), plot_df.index.max()),
+    x_range=x_range,
     session_visibility=session_visibility,
     show_buy_volume=show_buy_volume,
     show_sell_volume=show_sell_volume,
