@@ -152,6 +152,15 @@ if run_btn:
         start_iso = start_dt.isoformat()
         end_iso = end_dt.isoformat() if end_dt else None
         symbols_tuple = tuple(symbols)
+        cache_key = (
+            symbols_tuple,
+            chart_tf,
+            orb_tf,
+            start_iso,
+            end_iso,
+            int(volume_window),
+            int(percentile_bins),
+        )
         with st.status("Fetching data...", expanded=True) as status:
             status.write(f"Running pipeline for {len(symbols_tuple)} symbol(s)...")
             try:
@@ -187,6 +196,9 @@ if run_btn:
                     st.session_state["orb_orb_tf"] = orb_tf
                     st.session_state["orb_volume_window"] = int(volume_window)
                     st.session_state["orb_percentile_bins"] = int(percentile_bins)
+                    st.session_state["orb_cache_key"] = cache_key
+                    st.session_state.pop("analysis_cache_key", None)
+                    st.session_state.pop("analysis_outcomes", None)
                     if exchange_name:
                         st.session_state["orb_exchange"] = exchange_name
         st.toast("Fetch finished")
