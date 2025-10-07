@@ -31,18 +31,19 @@ def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
     else:
         idx = idx.tz_convert("UTC")
     enriched.index = idx
+    enriched = enriched.sort_index()
 
     idx_local = idx.tz_convert(LOCAL_TIMEZONE)
 
     enriched["__day"] = idx_local.normalize()
-    daily = enriched.groupby("__day", sort=False).agg({"high": "max", "low": "min"})
+    daily = enriched.groupby("__day", sort=True).agg({"high": "max", "low": "min"})
     prev_daily = daily.shift(1).rename(
         columns={"high": "prev_day_high", "low": "prev_day_low"}
     )
     enriched = enriched.join(prev_daily, on="__day")
 
-    enriched["__week"] = idx_local.to_period("W-MON")
-    weekly = enriched.groupby("__week", sort=False).agg({"high": "max", "low": "min"})
+    enriched["__week"] = idx_local.to_period("W")
+    weekly = enriched.groupby("__week", sort=True).agg({"high": "max", "low": "min"})
     prev_weekly = weekly.shift(1).rename(
         columns={"high": "prev_week_high", "low": "prev_week_low"}
     )
