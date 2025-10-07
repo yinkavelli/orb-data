@@ -332,7 +332,7 @@ def make_orb_figure(
                             y=chunk[mid_col],
                             mode="lines",
                             name=f"{name.upper()} ORB Mid",
-                            line=dict(color=base_color, width=1.2, dash="dot"),
+                            line=dict(color=base_color, width=1.2, dash="dash"),
                             opacity=0.65,
                             showlegend=False,
                             hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
