@@ -403,6 +403,30 @@ def make_orb_figure(
             line_width=0,
         )
 
+    def _add_level_line(series: pd.Series | None, color: str, label: str, width: float = 1.3) -> None:
+        if series is None:
+            return
+        non_null = series.dropna()
+        if non_null.empty:
+            return
+        value = float(non_null.iloc[0])
+        fig.add_hline(
+            y=value,
+            line_color=color,
+            line_width=width,
+            line_dash="solid",
+            annotation=dict(
+                text=label,
+                font=dict(color=color, size=10),
+                bgcolor="rgba(255,255,255,0.65)",
+            ),
+        )
+
+    _add_level_line(data.get("prev_day_high"), "#FDD835", "Prev Day High")
+    _add_level_line(data.get("prev_day_low"), "#FDD835", "Prev Day Low")
+    _add_level_line(data.get("prev_week_high"), "#212121", "Prev Week High", width=1.6)
+    _add_level_line(data.get("prev_week_low"), "#212121", "Prev Week Low", width=1.6)
+
     volume_traces_added = False
     if show_buy_volume and "volume_buy" in data.columns:
         buy_volume = data["volume_buy"].astype(float).fillna(0.0)

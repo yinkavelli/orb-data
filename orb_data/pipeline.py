@@ -20,6 +20,31 @@ from .orb_levels import (
 LOCAL_TIMEZONE = "Etc/GMT-4"
 
 
+def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty or not {"high", "low"}.issubset(frame.columns):
+        return frame
+
+    enriched = frame.copy()
+    idx = pd.DatetimeIndex(enriched.index)
+    if idx.tz is None:
+        idx = idx.tz_localize("UTC")
+    else:
+        idx = idx.tz_convert("UTC")
+    enriched.index = idx
+
+    enriched["__day"] = idx.normalize()
+    daily = enriched.groupby("__day").agg({"high": "max", "low": "min"})
+    prev_daily = daily.shift(1).rename(columns={"high": "prev_day_high", "low": "prev_day_low"})
+    enriched = enriched.join(prev_daily, on="__day")
+
+    enriched["__week"] = idx.to_period("W-MON")
+    weekly = enriched.groupby("__week").agg({"high": "max", "low": "min"})
+    prev_weekly = weekly.shift(1).rename(columns={"high": "prev_week_high", "low": "prev_week_low"})
+    enriched = enriched.join(prev_weekly, on="__week")
+
+    return enriched.drop(columns=["__day", "__week"])
+
+
 def _coerce_datetime(value: datetime | str) -> datetime:
     if isinstance(value, datetime):
         dt = value
@@ -215,6 +240,7 @@ class OrbDataPipeline:
             price_df["time_utc_plus4"] = index_utc.tz_convert(LOCAL_TIMEZONE)
             price_df["symbol"] = symbol
             price_df["orb_base_timeframe"] = self.orb_timeframe
+            price_df = _add_previous_extrema(price_df)
             frames.append(price_df)
             symbols.append(symbol)
 
