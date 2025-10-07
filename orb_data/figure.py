@@ -306,8 +306,8 @@ def make_orb_figure(
                         x=chunk.index,
                         y=chunk[high_col],
                         mode="lines",
-                        name=f"{name.upper()} ORB",
-                        line=dict(color=base_color, width=1.6),
+                        name=f"{name.upper()} ORB High",
+                        line=dict(color=base_color, width=1.6, dash="solid"),
                         opacity=0.9,
                         showlegend=False,
                         hovertemplate=f"{name.upper()} High: %{{y:.2f}}<extra></extra>",
@@ -319,7 +319,7 @@ def make_orb_figure(
                         y=chunk[low_col],
                         mode="lines",
                         name=f"{name.upper()} ORB Low",
-                        line=dict(color=base_color, width=1.2, dash="dot"),
+                        line=dict(color=base_color, width=1.2, dash="solid"),
                         opacity=0.65,
                         showlegend=False,
                         hovertemplate=f"{name.upper()} Low: %{{y:.2f}}<extra></extra>",
@@ -332,7 +332,7 @@ def make_orb_figure(
                             y=chunk[mid_col],
                             mode="lines",
                             name=f"{name.upper()} ORB Mid",
-                            line=dict(color=base_color, width=1.2, dash="dash"),
+                            line=dict(color=base_color, width=1.2, dash="dot"),
                             opacity=0.65,
                             showlegend=False,
                             hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
@@ -340,14 +340,14 @@ def make_orb_figure(
                     )
 
                 bull_specs = {
-                    "L1_bull": ("dash", 1.0),
+                    "L1_bull": ("dot", 1.0),
                     "L2_bull": ("dot", 1.0),
-                    "L3_bull": ("dashdot", 1.0),
+                    "L3_bull": ("dot", 1.0),
                 }
                 bear_specs = {
-                    "L1_bear": ("dash", 1.0),
+                    "L1_bear": ("dot", 1.0),
                     "L2_bear": ("dot", 1.0),
-                    "L3_bear": ("dashdot", 1.0),
+                    "L3_bear": ("dot", 1.0),
                 }
 
                 for suffix, (dash_style, width) in bull_specs.items():
