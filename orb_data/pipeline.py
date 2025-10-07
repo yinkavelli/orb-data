@@ -43,31 +43,18 @@ def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
     daily = enriched.groupby("__day", sort=True).agg({"high": "max", "low": "min"})
     daily = daily.sort_index()
 
-    prev_daily = daily.shift(1).rename(
-        columns={"high": "prev_day_high", "low": "prev_day_low"}
-    )
+    daily_extrema = pd.DataFrame(index=daily.index)
+    daily_extrema["prev_day_high"] = daily["high"].shift(1)
+    daily_extrema["prev_day_low"] = daily["low"].shift(1)
 
-    week_period = daily.index.to_period("W")
-    weekly = daily.groupby(week_period, sort=True).agg({"high": "max", "low": "min"})
+    week_index = daily.index.to_period("W-SUN")
+    weekly = daily.groupby(week_index, sort=True).agg({"high": "max", "low": "min"})
     weekly = weekly.sort_index()
-    prev_weekly = weekly.shift(1).rename(
-        columns={"high": "prev_week_high", "low": "prev_week_low"}
-    )
-    weekly_for_days = prev_weekly.reindex(week_period)
-    if weekly_for_days is not None:
-        weekly_for_days.index = daily.index
-        daily = daily.join(weekly_for_days)
+    prev_weekly = weekly.shift(1)
+    daily_extrema["prev_week_high"] = prev_weekly["high"].reindex(week_index).to_numpy()
+    daily_extrema["prev_week_low"] = prev_weekly["low"].reindex(week_index).to_numpy()
 
-    daily = daily.join(prev_daily)
-
-    join_cols = daily[[
-        "prev_day_high",
-        "prev_day_low",
-        "prev_week_high",
-        "prev_week_low",
-    ]]
-
-    result = enriched.join(join_cols, on="__day")
+    result = enriched.join(daily_extrema, on="__day")
     return result.drop(columns=["__day"])
 
 
