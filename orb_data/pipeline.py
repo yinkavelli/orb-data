@@ -47,12 +47,15 @@ def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
     daily_extrema["prev_day_high"] = daily["high"].shift(1)
     daily_extrema["prev_day_low"] = daily["low"].shift(1)
 
-    week_index = daily.index.to_period("W-SUN")
-    weekly = daily.groupby(week_index, sort=True).agg({"high": "max", "low": "min"})
+    week_start = daily.index - pd.to_timedelta(daily.index.dayofweek, unit="D")
+    week_start = week_start.normalize()
+
+    weekly = daily.groupby(week_start, sort=True).agg({"high": "max", "low": "min"})
     weekly = weekly.sort_index()
     prev_weekly = weekly.shift(1)
-    daily_extrema["prev_week_high"] = prev_weekly["high"].reindex(week_index).to_numpy()
-    daily_extrema["prev_week_low"] = prev_weekly["low"].reindex(week_index).to_numpy()
+
+    daily_extrema["prev_week_high"] = prev_weekly["high"].reindex(week_start).to_numpy()
+    daily_extrema["prev_week_low"] = prev_weekly["low"].reindex(week_start).to_numpy()
 
     result = enriched.join(daily_extrema, on="__day")
     return result.drop(columns=["__day"])
