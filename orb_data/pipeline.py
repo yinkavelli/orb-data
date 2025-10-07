@@ -28,6 +28,8 @@ def _build_daily_levels(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["prev_day_high", "prev_day_low"])
     daily = df[["high", "low"]].copy()
+    daily.index = pd.to_datetime(daily.index).tz_localize("UTC")
+    daily = daily.sort_index()
     daily["prev_day_high"] = daily["high"].shift(1)
     daily["prev_day_low"] = daily["low"].shift(1)
     return daily[["prev_day_high", "prev_day_low"]]
@@ -36,10 +38,20 @@ def _build_daily_levels(df: pd.DataFrame) -> pd.DataFrame:
 def _build_weekly_levels(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame(columns=["prev_week_high", "prev_week_low"])
+
     weekly = df[["high", "low"]].copy()
+    weekly.index = pd.to_datetime(weekly.index).tz_localize("UTC")
+    weekly = weekly.sort_index()
+
+    weekly_index = weekly.index
+    monday_start = (weekly_index - pd.to_timedelta(weekly_index.weekday, unit="D")).normalize()
+
     weekly["prev_week_high"] = weekly["high"].shift(1)
     weekly["prev_week_low"] = weekly["low"].shift(1)
-    return weekly[["prev_week_high", "prev_week_low"]]
+
+    weekly_levels = weekly[["prev_week_high", "prev_week_low"]]
+    weekly_levels.index = monday_start
+    return weekly_levels
 
 
 def _coerce_datetime(value: datetime | str) -> datetime:
@@ -280,24 +292,22 @@ class OrbDataPipeline:
 
             daily_levels = _build_daily_levels(daily_raw)
             weekly_levels = _build_weekly_levels(weekly_raw)
-            if not daily_levels.empty:
-                daily_levels.index = pd.to_datetime(daily_levels.index).tz_convert("UTC")
-            if not weekly_levels.empty:
-                weekly_levels.index = pd.to_datetime(weekly_levels.index).tz_convert("UTC")
 
-            if not price_df.empty and not daily_levels.empty:
-                daily_join = daily_levels.reindex(price_df.index, method="ffill")
-                price_df = price_df.join(daily_join, how="left")
-            else:
-                price_df["prev_day_high"] = np.nan
-                price_df["prev_day_low"] = np.nan
+            if not price_df.empty:
+                if not daily_levels.empty:
+                    daily_join = daily_levels.reindex(price_df.index.normalize(), method="ffill")
+                    price_df = price_df.join(daily_join, how="left")
+                else:
+                    price_df["prev_day_high"] = np.nan
+                    price_df["prev_day_low"] = np.nan
 
-            if not price_df.empty and not weekly_levels.empty:
-                weekly_join = weekly_levels.reindex(price_df.index, method="ffill")
-                price_df = price_df.join(weekly_join, how="left")
-            else:
-                price_df["prev_week_high"] = np.nan
-                price_df["prev_week_low"] = np.nan
+                if not weekly_levels.empty:
+                    week_start = (price_df.index - pd.to_timedelta(price_df.index.weekday, unit="D")).normalize()
+                    weekly_join = weekly_levels.reindex(week_start, method="ffill")
+                    price_df = price_df.join(weekly_join, how="left")
+                else:
+                    price_df["prev_week_high"] = np.nan
+                    price_df["prev_week_low"] = np.nan
 
             price_df = price_df[price_df.index >= self.start_dt]
             if self.end_dt is not None:
