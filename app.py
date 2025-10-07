@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Dict, List
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -36,6 +36,31 @@ VOLUME_LABEL_MARKUP = {
     "buy": ":green[BUY]",
     "sell": ":red[SELL]",
 }
+
+
+@st.cache_data(show_spinner="Fetching data...")
+def run_pipeline_cached(
+    symbols: Tuple[str, ...],
+    chart_timeframe: str,
+    orb_timeframe: str,
+    start_iso: str,
+    end_iso: Optional[str],
+    volume_window: int,
+    percentile_bins: int,
+):
+    pipeline = OrbDataPipeline(
+        symbols=list(symbols),
+        chart_timeframe=chart_timeframe,
+        start=start_iso,
+        end=end_iso,
+        orb_timeframe=orb_timeframe,
+        sessions=DEFAULT_SESSIONS,
+        volume_percentile_window=volume_window,
+        percentile_bins=percentile_bins,
+    )
+    frame = pipeline.run()
+    exchange_name = getattr(pipeline.client, "exchange_id", None)
+    return frame, tuple(pipeline.symbols), exchange_name
 
 
 def _extract_symbol_frame(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
@@ -112,6 +137,9 @@ with st.sidebar:
     )
     percentile_bins = bin_labels[bin_choice]
     run_btn = st.button("Fetch data", type="primary")
+    if st.button("Clear cached data", type="secondary"):
+        run_pipeline_cached.clear()
+        st.success("Pipeline cache cleared. Next fetch will hit the data source.")
 
 symbols: List[str] = []
 if symbols_text.strip():
@@ -121,37 +149,40 @@ if run_btn:
     if not symbols:
         st.error("Please enter at least one symbol (e.g. BTC/USDT).")
     else:
+        start_iso = start_dt.isoformat()
+        end_iso = end_dt.isoformat() if end_dt else None
+        symbols_tuple = tuple(symbols)
         with st.status("Fetching data...", expanded=True) as status:
-            start_iso = start_dt.isoformat()
-            end_iso = end_dt.isoformat() if end_dt else None
-            status.write(f"Running pipeline for {len(symbols)} symbol(s)...")
+            status.write(f"Running pipeline for {len(symbols_tuple)} symbol(s)...")
             try:
-                pipeline = OrbDataPipeline(
-                    symbols=symbols,
-                    chart_timeframe=chart_tf,
-                    start=start_iso,
-                    end=end_iso,
-                    orb_timeframe=orb_tf,
-                    volume_percentile_window=int(volume_window),
-                    percentile_bins=int(percentile_bins),
+                frame, resolved_symbols, exchange_name = run_pipeline_cached(
+                    symbols_tuple,
+                    chart_tf,
+                    orb_tf,
+                    start_iso,
+                    end_iso,
+                    int(volume_window),
+                    int(percentile_bins),
                 )
-                frame = pipeline.run()
             except Exception as exc:
                 status.update(label="Fetch failed", state="error")
                 st.error(f"Pipeline error: {exc}")
                 frame = pd.DataFrame()
+                exchange_name = None
+                resolved_symbols = symbols_tuple
             else:
                 if frame.empty:
                     status.update(label="No data returned", state="warning")
                     st.warning("No data returned for the selected configuration.")
                 else:
                     status.update(label="Fetch complete", state="complete")
-                    st.success(f"Fetched {frame.shape[0]} rows across {len(pipeline.symbols)} symbol(s).")
-                    exchange_name = getattr(pipeline.client, "exchange_id", None)
+                    st.success(
+                        f"Fetched {frame.shape[0]} rows across {len(resolved_symbols)} symbol(s)."
+                    )
                     if exchange_name:
                         st.caption(f"Data source: ccxt.{exchange_name}")
                     st.session_state["orb_df"] = frame
-                    st.session_state["orb_symbols"] = list(pipeline.symbols)
+                    st.session_state["orb_symbols"] = list(resolved_symbols)
                     st.session_state["orb_chart_tf"] = chart_tf
                     st.session_state["orb_orb_tf"] = orb_tf
                     st.session_state["orb_volume_window"] = int(volume_window)
