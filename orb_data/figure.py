@@ -432,8 +432,6 @@ def make_orb_figure(
 
     _add_level_line(data.get("prev_day_high"), "#FDD835", "Prev Day High")
     _add_level_line(data.get("prev_day_low"), "#FDD835", "Prev Day Low")
-    _add_level_line(data.get("prev_week_high"), "#000000", "Prev Week High", width=1.8)
-    _add_level_line(data.get("prev_week_low"), "#424242", "Prev Week Low", width=1.8)
 
     volume_traces_added = False
     if show_buy_volume and "volume_buy" in data.columns:
