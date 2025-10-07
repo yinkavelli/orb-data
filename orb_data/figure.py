@@ -223,7 +223,7 @@ def make_orb_figure(
             width=body_widths_list,
             marker=dict(
                 color=body_colors,
-                line=dict(color=outline_colors_list, width=1.5),
+                line=dict(color=outline_colors_list, width=1.1),
             ),
             offsetgroup="candles",
             showlegend=False,
