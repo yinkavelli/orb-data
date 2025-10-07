@@ -197,41 +197,49 @@ if symbol_choice not in st.session_state[date_state_key] or st.session_state[dat
     st.session_state[date_state_key][symbol_choice] = available_dates[-1]
 
 index_lookup = {ts: idx for idx, ts in enumerate(available_dates)}
-current_date = st.session_state[date_state_key][symbol_choice]
-
-session_picker_key = f"date_picker_{symbol_choice}"
-current_idx = index_lookup[current_date]
-picked = st.selectbox(
-    f"Session day ({LOCAL_TZ_LABEL})",
-    options=available_dates,
-    index=current_idx,
-    format_func=lambda ts: ts.strftime("%Y-%m-%d"),
-    key=session_picker_key,
+view_mode = st.radio(
+    "Chart mode",
+    ["Daily", "Continuous"],
+    horizontal=True,
+    key="orb_view_mode",
 )
-if picked != current_date:
-    st.session_state[date_state_key][symbol_choice] = picked
-    current_date = picked
 
-prev_col, next_col = st.columns([1, 1])
-with prev_col:
-    disable_prev = index_lookup[current_date] == 0
-    if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
-        idx = index_lookup[current_date]
-        if idx > 0:
-            new_date = available_dates[idx - 1]
-            st.session_state[date_state_key][symbol_choice] = new_date
-            current_date = new_date
-with next_col:
-    disable_next = index_lookup[current_date] == len(available_dates) - 1
-    if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
-        idx = index_lookup[current_date]
-        if idx < len(available_dates) - 1:
-            new_date = available_dates[idx + 1]
-            st.session_state[date_state_key][symbol_choice] = new_date
-            current_date = new_date
+current_date = None
+if view_mode == "Daily":
+    current_date = st.session_state[date_state_key][symbol_choice]
+    session_picker_key = f"date_picker_{symbol_choice}"
+    current_idx = index_lookup[current_date]
+    picked = st.selectbox(
+        f"Session day ({LOCAL_TZ_LABEL})",
+        options=available_dates,
+        index=current_idx,
+        format_func=lambda ts: ts.strftime("%Y-%m-%d"),
+        key=session_picker_key,
+    )
+    if picked != current_date:
+        st.session_state[date_state_key][symbol_choice] = picked
+        current_date = picked
 
-current_date = st.session_state[date_state_key][symbol_choice]
-current_idx = index_lookup[current_date]
+    prev_col, next_col = st.columns([1, 1])
+    with prev_col:
+        disable_prev = index_lookup[current_date] == 0
+        if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
+            idx = index_lookup[current_date]
+            if idx > 0:
+                new_date = available_dates[idx - 1]
+                st.session_state[date_state_key][symbol_choice] = new_date
+                current_date = new_date
+    with next_col:
+        disable_next = index_lookup[current_date] == len(available_dates) - 1
+        if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
+            idx = index_lookup[current_date]
+            if idx < len(available_dates) - 1:
+                new_date = available_dates[idx + 1]
+                st.session_state[date_state_key][symbol_choice] = new_date
+                current_date = new_date
+
+    current_date = st.session_state[date_state_key][symbol_choice]
+    current_idx = index_lookup[current_date]
 
 session_mode = st.radio("Session filter", ["All sessions", "Custom"], horizontal=True, key="session_mode")
 session_select_key = "session_multiselect"
@@ -279,25 +287,60 @@ if sell_key not in st.session_state:
     st.session_state[sell_key] = False
 show_sell_volume = toggle_cols[-1].toggle("🟥 SELL", value=st.session_state[sell_key], key=sell_key)
 
-start_ts = current_date
-end_ts = current_date + pd.Timedelta(days=1)
-mask = (local_series >= start_ts) & (local_series < end_ts)
-day_df = symbol_df.loc[mask].copy()
+caption_sessions = ", ".join(s.upper() for s in selected_sessions)
 
-if not day_df.empty and selected_sessions != SESSION_NAMES:
-    session_cols = [f"session_id_{name}" for name in selected_sessions if f"session_id_{name}" in day_df.columns]
-    if session_cols:
-        session_mask = pd.Series(False, index=day_df.index)
-        for col in session_cols:
-            session_mask |= day_df[col].notna()
-        day_df = day_df.loc[session_mask]
+if view_mode == "Daily":
+    start_ts = current_date
+    end_ts = current_date + pd.Timedelta(days=1)
+    mask = (local_series >= start_ts) & (local_series < end_ts)
+    filtered_df = symbol_df.loc[mask].copy()
 
-if day_df.empty:
-    st.warning("No candles match the selected day/session filters.")
-    st.stop()
+    if not filtered_df.empty and selected_sessions != SESSION_NAMES:
+        session_cols = [
+            f"session_id_{name}"
+            for name in selected_sessions
+            if f"session_id_{name}" in filtered_df.columns
+        ]
+        if session_cols:
+            session_mask = pd.Series(False, index=filtered_df.index)
+            for col in session_cols:
+                session_mask |= filtered_df[col].notna()
+            filtered_df = filtered_df.loc[session_mask]
 
-day_df.sort_values("time_utc_plus4", inplace=True)
-plot_df = day_df.set_index("time_utc_plus4")
+    if filtered_df.empty:
+        st.warning("No candles match the selected day/session filters.")
+        st.stop()
+
+    filtered_df.sort_values("time_utc_plus4", inplace=True)
+    plot_df = filtered_df.set_index("time_utc_plus4")
+    caption_day = current_date.strftime("%Y-%m-%d")
+    caption_text = f"Day: {caption_day} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}"
+else:
+    filtered_df = symbol_df.copy()
+    if selected_sessions != SESSION_NAMES:
+        session_cols = [
+            f"session_id_{name}"
+            for name in selected_sessions
+            if f"session_id_{name}" in filtered_df.columns
+        ]
+        if session_cols:
+            session_mask = pd.Series(False, index=filtered_df.index)
+            for col in session_cols:
+                session_mask |= filtered_df[col].notna()
+            filtered_df = filtered_df.loc[session_mask]
+
+    if filtered_df.empty:
+        st.warning("No candles match the selected session filters.")
+        st.stop()
+
+    filtered_df.sort_values("time_utc_plus4", inplace=True)
+    plot_df = filtered_df.set_index("time_utc_plus4")
+    start_label = plot_df.index.min().strftime("%Y-%m-%d %H:%M")
+    end_label = plot_df.index.max().strftime("%Y-%m-%d %H:%M")
+    caption_text = (
+        f"Range: {start_label} → {end_label} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}"
+    )
+
 fig = make_orb_figure(
     plot_df,
     symbol=symbol_choice,
@@ -309,9 +352,7 @@ fig = make_orb_figure(
     show_buy_volume=show_buy_volume,
     show_sell_volume=show_sell_volume,
 )
-caption_day = current_date.strftime("%Y-%m-%d")
-caption_sessions = ", ".join(s.upper() for s in selected_sessions)
-st.caption(f"Day: {caption_day} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}")
+st.caption(caption_text)
 st.plotly_chart(fig, use_container_width=True)
 
 with st.expander("Full pipeline output (first 200 rows)", expanded=False):
