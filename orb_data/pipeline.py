@@ -182,8 +182,10 @@ class OrbDataPipeline:
         orb_delta = _timeframe_to_timedelta(self.orb_timeframe)
         base_delta = chart_delta if chart_delta >= orb_delta else orb_delta
         percentile_buffer = base_delta * max(self.volume_percentile_window, 1)
-        lookback = max(pd.Timedelta(days=7), percentile_buffer)
-        fetch_since = self.start_dt - lookback
+        intraday_lookback = max(pd.Timedelta(days=7), percentile_buffer)
+        fetch_since = self.start_dt - intraday_lookback
+        daily_since = self.start_dt - pd.Timedelta(days=7)
+        weekly_since = self.start_dt - pd.Timedelta(days=14)
 
         for symbol in self.symbols:
             price_raw = self.client.fetch_ohlcv(
@@ -208,14 +210,14 @@ class OrbDataPipeline:
             daily_raw = self.client.fetch_ohlcv(
                 symbol,
                 "1d",
-                since=fetch_since,
+                since=daily_since,
                 until=self.end_dt,
             )
 
             weekly_raw = self.client.fetch_ohlcv(
                 symbol,
                 "1w",
-                since=fetch_since,
+                since=weekly_since,
                 until=self.end_dt,
             )
 
