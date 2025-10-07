@@ -32,14 +32,20 @@ def _add_previous_extrema(frame: pd.DataFrame) -> pd.DataFrame:
         idx = idx.tz_convert("UTC")
     enriched.index = idx
 
-    enriched["__day"] = idx.normalize()
-    daily = enriched.groupby("__day").agg({"high": "max", "low": "min"})
-    prev_daily = daily.shift(1).rename(columns={"high": "prev_day_high", "low": "prev_day_low"})
+    idx_local = idx.tz_convert(LOCAL_TIMEZONE)
+
+    enriched["__day"] = idx_local.normalize()
+    daily = enriched.groupby("__day", sort=False).agg({"high": "max", "low": "min"})
+    prev_daily = daily.shift(1).rename(
+        columns={"high": "prev_day_high", "low": "prev_day_low"}
+    )
     enriched = enriched.join(prev_daily, on="__day")
 
-    enriched["__week"] = idx.to_period("W-MON")
-    weekly = enriched.groupby("__week").agg({"high": "max", "low": "min"})
-    prev_weekly = weekly.shift(1).rename(columns={"high": "prev_week_high", "low": "prev_week_low"})
+    enriched["__week"] = idx_local.to_period("W-MON")
+    weekly = enriched.groupby("__week", sort=False).agg({"high": "max", "low": "min"})
+    prev_weekly = weekly.shift(1).rename(
+        columns={"high": "prev_week_high", "low": "prev_week_low"}
+    )
     enriched = enriched.join(prev_weekly, on="__week")
 
     return enriched.drop(columns=["__day", "__week"])

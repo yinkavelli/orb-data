@@ -403,23 +403,31 @@ def make_orb_figure(
             line_width=0,
         )
 
-    def _add_level_line(series: pd.Series | None, color: str, label: str, width: float = 1.3) -> None:
-        if series is None:
+    x_min = data.index.min()
+    x_max = data.index.max()
+
+    def _add_level_line(
+        series: pd.Series | None,
+        color: str,
+        label: str,
+        width: float = 1.3,
+    ) -> None:
+        if series is None or pd.isna(x_min) or pd.isna(x_max):
             return
         non_null = series.dropna()
         if non_null.empty:
             return
         value = float(non_null.iloc[0])
-        fig.add_hline(
-            y=value,
-            line_color=color,
-            line_width=width,
-            line_dash="solid",
-            annotation=dict(
-                text=label,
-                font=dict(color=color, size=10),
-                bgcolor="rgba(255,255,255,0.65)",
-            ),
+        fig.add_trace(
+            go.Scatter(
+                x=[x_min, x_max],
+                y=[value, value],
+                mode="lines",
+                line=dict(color=color, width=width),
+                hovertemplate=f"{label}: %{{y:,.2f}}<extra></extra>",
+                name=label,
+                showlegend=False,
+            )
         )
 
     _add_level_line(data.get("prev_day_high"), "#FDD835", "Prev Day High")
