@@ -3,3 +3,4 @@ pandas>=2.2.0
 numpy>=1.26.0
 plotly>=5.0.0
 streamlit>=1.30.0
+bokeh>=2.4.0,<2.5

@@ -103,6 +103,10 @@ def make_orb_figure(
     session_visibility: Dict[str, bool] | None = None,
     show_buy_volume: bool = False,
     show_sell_volume: bool = False,
+    show_day_boundaries: bool = True,
+    show_prev_levels: bool = True,
+    show_rangeslider: bool = False,
+    initial_x_range: tuple[pd.Timestamp | None, pd.Timestamp | None] | None = None,
 ) -> go.Figure:
     data = _select_symbol_frame(frame, symbol).copy()
     if data.empty:
@@ -204,10 +208,10 @@ def make_orb_figure(
 
     body_hover = (
         "<b>%{x|%Y-%m-%d %H:%M:%S}</b><br>"
-        "Open: %{customdata[0]:,.2f}<br>"
-        "High: %{customdata[1]:,.2f}<br>"
-        "Low: %{customdata[2]:,.2f}<br>"
-        "Close: %{customdata[3]:,.2f}<br>"
+    "Open: %{customdata[0]:,.5f}<br>"
+    "High: %{customdata[1]:,.5f}<br>"
+    "Low: %{customdata[2]:,.5f}<br>"
+    "Close: %{customdata[3]:,.5f}<br>"
         "Volume: %{customdata[4]:,.0f}<br>"
         "Volume\u2013Spread: %{customdata[5]}<br>"
         "\u0394Vol: %{customdata[6]:,.0f}<br>"
@@ -259,7 +263,7 @@ def make_orb_figure(
                 mode="lines",
                 line=dict(color="#00897B", width=1.4),
                 showlegend=False,
-                hovertemplate="EMA 5: %{y:,.2f}<extra></extra>",
+                hovertemplate="EMA 5: %{y:,.5f}<extra></extra>",
                 name="EMA 5",
             )
         )
@@ -272,7 +276,7 @@ def make_orb_figure(
                 mode="lines",
                 line=dict(color="#3949AB", width=1.4),
                 showlegend=False,
-                hovertemplate="EMA 13: %{y:,.2f}<extra></extra>",
+                hovertemplate="EMA 13: %{y:,.5f}<extra></extra>",
                 name="EMA 13",
             )
         )
@@ -310,7 +314,7 @@ def make_orb_figure(
                         line=dict(color=base_color, width=1.6, dash="solid"),
                         opacity=0.9,
                         showlegend=False,
-                        hovertemplate=f"{name.upper()} High: %{{y:.2f}}<extra></extra>",
+                        hovertemplate=f"{name.upper()} High: %{{y:.5f}}<extra></extra>",
                     )
                 )
                 fig.add_trace(
@@ -322,7 +326,7 @@ def make_orb_figure(
                         line=dict(color=base_color, width=1.2, dash="solid"),
                         opacity=0.65,
                         showlegend=False,
-                        hovertemplate=f"{name.upper()} Low: %{{y:.2f}}<extra></extra>",
+                        hovertemplate=f"{name.upper()} Low: %{{y:.5f}}<extra></extra>",
                     )
                 )
                 if mid_col in chunk.columns:
@@ -335,7 +339,7 @@ def make_orb_figure(
                             line=dict(color=base_color, width=1.2, dash="dash"),
                             opacity=0.65,
                             showlegend=False,
-                            hovertemplate=f"{name.upper()} Mid: %{{y:.2f}}<extra></extra>",
+                            hovertemplate=f"{name.upper()} Mid: %{{y:.5f}}<extra></extra>",
                         )
                     )
 
@@ -361,7 +365,7 @@ def make_orb_figure(
                                 line=dict(color=base_color, width=width, dash=dash_style),
                                 opacity=0.65,
                                 showlegend=False,
-                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bull: %{{y:.2f}}<extra></extra>",
+                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bull: %{{y:.5f}}<extra></extra>",
                             )
                         )
 
@@ -377,7 +381,7 @@ def make_orb_figure(
                                 line=dict(color=faded_color, width=width, dash=dash_style),
                                 opacity=0.65,
                                 showlegend=False,
-                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bear: %{{y:.2f}}<extra></extra>",
+                                hovertemplate=f"{name.upper()} {suffix.split('_')[0].upper()} Bear: %{{y:.5f}}<extra></extra>",
                             )
                         )
                 if (
@@ -402,7 +406,6 @@ def make_orb_figure(
             layer="below",
             line_width=0,
         )
-
     x_min = data.index.min()
     x_max = data.index.max()
 
@@ -424,16 +427,48 @@ def make_orb_figure(
                 y=[value, value],
                 mode="lines",
                 line=dict(color=color, width=width),
-                hovertemplate=f"{label}: %{{y:,.2f}}<extra></extra>",
+                hovertemplate=f"{label}: %{{y:,.5f}}<extra></extra>",
                 name=label,
                 showlegend=False,
             )
         )
 
-    _add_level_line(data.get("prev_day_high"), "#FDD835", "Prev Day High")
-    _add_level_line(data.get("prev_day_low"), "#FDD835", "Prev Day Low")
-    _add_level_line(data.get("prev_week_high"), "#212121", "Prev Week High", width=1.6)
-    _add_level_line(data.get("prev_week_low"), "#424242", "Prev Week Low", width=1.6)
+    # Previous day/week levels: render as stepwise series (time-aligned) if requested
+    if show_prev_levels:
+        pdh = data.get("prev_day_high")
+        pdl = data.get("prev_day_low")
+        pwh = data.get("prev_week_high")
+        pwl = data.get("prev_week_low")
+
+        def _add_step_series(series: pd.Series | None, color: str, name: str, width: float = 1.3) -> None:
+            if series is None:
+                return
+            s = series.dropna()
+            if s.empty:
+                return
+            # Draw as a continuous line; since values are constant within day/week, this appears stepwise.
+            fig.add_trace(
+                go.Scatter(
+                    x=s.index,
+                    y=s.astype(float),
+                    mode="lines",
+                    line=dict(color=color, width=width),
+                    name=name,
+                    hovertemplate=f"{name}: %{{y:,.5f}}<extra></extra>",
+                    showlegend=False,
+                )
+            )
+
+        _add_step_series(pdh, "#FDD835", "Prev Day High")
+        _add_step_series(pdl, "#FDD835", "Prev Day Low")
+        _add_step_series(pwh, "#212121", "Prev Week High", width=1.6)
+        _add_step_series(pwl, "#424242", "Prev Week Low", width=1.6)
+    else:
+        # Fallback: single flat lines across the window
+        _add_level_line(data.get("prev_day_high"), "#FDD835", "Prev Day High")
+        _add_level_line(data.get("prev_day_low"), "#FDD835", "Prev Day Low")
+        _add_level_line(data.get("prev_week_high"), "#212121", "Prev Week High", width=1.6)
+        _add_level_line(data.get("prev_week_low"), "#424242", "Prev Week Low", width=1.6)
 
     volume_traces_added = False
     if show_buy_volume and "volume_buy" in data.columns:
@@ -506,22 +541,51 @@ def make_orb_figure(
             zeroline=False,
             linecolor="#b0b0b0",
             tickfont=dict(color="#424242"),
+            tickformat=".5f",
             title_standoff=24,
         ),
         margin=dict(t=70, l=60, r=220, b=110),
-        xaxis_rangeslider_visible=False,
+        xaxis_rangeslider_visible=show_rangeslider,
         hovermode="closest",
         showlegend=False,
     )
     fig.update_xaxes(showgrid=False)
     fig.update_yaxes(showgrid=False)
-    if x_range is not None:
-        left = _coerce_timestamp(x_range[0])
-        right = _coerce_timestamp(x_range[1])
+    effective_range = initial_x_range if initial_x_range is not None else x_range
+    if effective_range is not None:
+        left = _coerce_timestamp(effective_range[0])
+        right = _coerce_timestamp(effective_range[1])
         if left is not None and right is not None:
             if left > right:
                 left, right = right, left
             fig.update_xaxes(range=[left, right])
+
+    # Day boundary markers (Dubai local day starts) if requested
+    if show_day_boundaries and len(data.index) > 0:
+        idx = data.index
+        # Ensure tz-aware index in the axis timezone (Dubai local configured upstream)
+        if getattr(idx, "tz", None) is None:
+            idx = pd.DatetimeIndex(idx, tz="UTC")
+        try:
+            base_days = pd.DatetimeIndex(sorted(pd.unique(idx.normalize())))
+            local_day_starts = base_days + pd.Timedelta(hours=4)
+        except Exception:
+            local_day_starts = pd.DatetimeIndex([])
+        if len(local_day_starts) > 0:
+            xr = fig.layout.xaxis.range if hasattr(fig.layout, "xaxis") else None
+            x_left = pd.to_datetime(xr[0]) if xr and xr[0] is not None else idx.min()
+            x_right = pd.to_datetime(xr[1]) if xr and xr[1] is not None else idx.max()
+            # Coerce bounds to same tz as index
+            tz = idx.tz
+            x_left = (pd.Timestamp(x_left).tz_localize(tz) if getattr(x_left, "tz", None) is None else pd.Timestamp(x_left).tz_convert(tz))
+            x_right = (pd.Timestamp(x_right).tz_localize(tz) if getattr(x_right, "tz", None) is None else pd.Timestamp(x_right).tz_convert(tz))
+            for ts in local_day_starts:
+                if x_left <= ts <= x_right:
+                    fig.add_vline(
+                        x=ts,
+                        line=dict(color="#BDBDBD", width=1, dash="dot"),
+                        opacity=0.8,
+                    )
     return fig
 
 

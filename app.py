@@ -6,7 +6,13 @@ from typing import Dict, List, Optional, Tuple
 import pandas as pd
 import streamlit as st
 
-from orb_data import DEFAULT_SESSIONS, OrbDataPipeline
+from orb_data import (
+    DEFAULT_SESSIONS,
+    OrbDataPipeline,
+    prepare_candlestick_frame,
+    make_bokeh_candlestick,
+    ChartBackendError,
+)
 from orb_data.figure import make_orb_figure
 
 st.set_page_config(page_title="ORB Data Viewer", layout="wide")
@@ -136,9 +142,44 @@ with st.sidebar:
         help="Number of percentile buckets for candle volume and spread.",
     )
     percentile_bins = bin_labels[bin_choice]
+    view_options = {
+        "Last 1 day": "1d",
+        "Last N candles": "ncandles",
+        "Auto (full data)": "auto",
+    }
+    view_choice_label = st.selectbox(
+        "Initial chart window",
+        options=list(view_options.keys()),
+        index=0,
+        help="Controls the default zoom when the chart first renders.",
+    )
+    view_choice = view_options[view_choice_label]
+    candle_window = 200
+    if view_choice == "ncandles":
+        candle_window = st.number_input(
+            "Candles in initial view",
+            min_value=10,
+            max_value=5000,
+            value=200,
+            step=10,
+            help="The chart will open showing the most recent N candles.",
+        )
     run_btn = st.button("Fetch data", type="primary")
     if st.button("Clear cached data", type="secondary"):
         run_pipeline_cached.clear()
+        for key in (
+            "orb_df",
+            "orb_symbols",
+            "orb_chart_tf",
+            "orb_orb_tf",
+            "orb_volume_window",
+            "orb_percentile_bins",
+            "orb_exchange",
+            "orb_dataset_key",
+            "targeted_analysis_results",
+            "targeted_analysis_signature",
+        ):
+            st.session_state.pop(key, None)
         st.success("Pipeline cache cleared. Next fetch will hit the data source.")
 
 symbols: List[str] = []
@@ -189,6 +230,18 @@ if run_btn:
                     st.session_state["orb_percentile_bins"] = int(percentile_bins)
                     if exchange_name:
                         st.session_state["orb_exchange"] = exchange_name
+                    dataset_key = (
+                        tuple(resolved_symbols),
+                        chart_tf,
+                        orb_tf,
+                        start_iso,
+                        end_iso,
+                        int(volume_window),
+                        int(percentile_bins),
+                    )
+                    st.session_state["orb_dataset_key"] = dataset_key
+                    st.session_state.pop("targeted_analysis_results", None)
+                    st.session_state.pop("targeted_analysis_signature", None)
         st.toast("Fetch finished")
 
 if "orb_df" not in st.session_state:
@@ -212,6 +265,12 @@ st.caption(f"Chart timeframe: {chart_tf} | ORB timeframe: {orb_tf}")
 if exchange_name:
     st.caption(f"Exchange source: ccxt.{exchange_name}")
 st.caption(f"Percentile window: {volume_window} | Bins: {percentile_bins}")
+chart_backend = st.selectbox(
+    "Chart backend",
+    ("Bokeh", "Plotly"),
+    index=0,
+    help="Bokeh offers seamless wheel-zoom and panning; Plotly remains available for reference.",
+)
 
 symbol_df = _extract_symbol_frame(frame, symbol_choice)
 if symbol_df.empty:
@@ -219,91 +278,12 @@ if symbol_df.empty:
     st.stop()
 
 symbol_df = _ensure_time_columns(symbol_df)
-local_series = symbol_df["time_utc_plus4"]
-available_dates = sorted(local_series.dt.normalize().unique())
-if not available_dates:
+local_series = pd.to_datetime(symbol_df["time_utc_plus4"])
+if local_series.empty:
     st.warning("No timestamps found for the selected symbol.")
     st.stop()
 
-date_state_key = "orb_selected_dates"
-if date_state_key not in st.session_state:
-    st.session_state[date_state_key] = {}
-if symbol_choice not in st.session_state[date_state_key] or st.session_state[date_state_key][symbol_choice] not in available_dates:
-    st.session_state[date_state_key][symbol_choice] = available_dates[-1]
-
-index_lookup = {ts: idx for idx, ts in enumerate(available_dates)}
-view_mode = st.radio(
-    "Chart mode",
-    ["Continuous", "Daily"],
-    horizontal=True,
-    key="orb_view_mode",
-)
-
-current_date = st.session_state[date_state_key][symbol_choice]
-current_idx = index_lookup[current_date]
-
-if view_mode == "Daily":
-    session_picker_key = f"date_picker_{symbol_choice}"
-    picked = st.selectbox(
-        f"Session day ({LOCAL_TZ_LABEL})",
-        options=available_dates,
-        index=current_idx,
-        format_func=lambda ts: ts.strftime("%Y-%m-%d"),
-        key=session_picker_key,
-    )
-    if picked != current_date:
-        st.session_state[date_state_key][symbol_choice] = picked
-        current_date = picked
-        current_idx = index_lookup[current_date]
-
-prev_col, next_col = st.columns([1, 1])
-with prev_col:
-    disable_prev = index_lookup[current_date] == 0
-    if st.button("\u2190 Prev Day", use_container_width=True, disabled=disable_prev):
-        idx = index_lookup[current_date]
-        if idx > 0:
-            new_date = available_dates[idx - 1]
-            st.session_state[date_state_key][symbol_choice] = new_date
-            current_date = new_date
-            current_idx = index_lookup[current_date]
-with next_col:
-    disable_next = index_lookup[current_date] == len(available_dates) - 1
-    if st.button("Next Day \u2192", use_container_width=True, disabled=disable_next):
-        idx = index_lookup[current_date]
-        if idx < len(available_dates) - 1:
-            new_date = available_dates[idx + 1]
-            st.session_state[date_state_key][symbol_choice] = new_date
-            current_date = new_date
-            current_idx = index_lookup[current_date]
-
-current_date = st.session_state[date_state_key][symbol_choice]
-current_idx = index_lookup[current_date]
-
-session_mode = st.radio("Session filter", ["All sessions", "Custom"], horizontal=True, key="session_mode")
-session_select_key = "session_multiselect"
-if session_select_key not in st.session_state:
-    st.session_state[session_select_key] = SESSION_NAMES.copy()
-
-selected_sessions: List[str]
-if session_mode == "All sessions":
-    selected_sessions = SESSION_NAMES.copy()
-else:
-    preset_choice = st.selectbox(
-        "Quick presets",
-        options=["Keep current"] + list(SESSION_PRESETS.keys()),
-        help="Apply a pre-defined session combination, then fine-tune below.",
-        key="session_preset",
-    )
-    if preset_choice != "Keep current":
-        st.session_state[session_select_key] = SESSION_PRESETS[preset_choice]
-    selected_sessions = st.multiselect(
-        "Visible sessions",
-        SESSION_NAMES,
-        key=session_select_key,
-        help="Pick one or more sessions to overlay.",
-    )
-    if not selected_sessions:
-        selected_sessions = SESSION_NAMES.copy()
+selected_sessions: List[str] = SESSION_NAMES.copy()
 
 session_visibility: Dict[str, bool] = {
     name: st.session_state.get(f"session_toggle_{name}", True) for name in SESSION_NAMES
@@ -337,13 +317,7 @@ show_sell_volume = toggle_cols[-1].checkbox(
     key=sell_key,
 )
 
-caption_sessions = ", ".join(s.upper() for s in selected_sessions)
-focus_start = current_date
-focus_end = current_date + pd.Timedelta(days=1)
-x_range = (focus_start, focus_end)
-
-mask = (local_series >= focus_start) & (local_series < focus_end)
-filtered_df = symbol_df.loc[mask].copy()
+filtered_df = symbol_df.copy()
 
 if not filtered_df.empty and selected_sessions != SESSION_NAMES:
     session_cols = [
@@ -358,39 +332,83 @@ if not filtered_df.empty and selected_sessions != SESSION_NAMES:
         filtered_df = filtered_df.loc[session_mask]
 
 if filtered_df.empty:
-    st.warning("No candles match the selected day/session filters.")
+    st.warning("No candles available after applying filters.")
     st.stop()
 
 filtered_df.sort_values("time_utc_plus4", inplace=True)
 plot_df = filtered_df.set_index("time_utc_plus4")
 
-caption_day = current_date.strftime("%Y-%m-%d")
-if view_mode == "Daily":
-    caption_text = f"Day: {caption_day} {LOCAL_TZ_LABEL} | Sessions: {caption_sessions}"
+coverage_start = local_series.min()
+coverage_end = local_series.max()
+if pd.isna(coverage_start) or pd.isna(coverage_end):
+    coverage_text = f"Data coverage ({LOCAL_TZ_LABEL}): unavailable"
 else:
-    full_start = symbol_df["time_utc_plus4"].min()
-    full_end = symbol_df["time_utc_plus4"].max()
-    if pd.isna(full_start) or pd.isna(full_end):
-        caption_text = f"Focus day: {caption_day} | Sessions: {caption_sessions}"
-    else:
-        caption_text = (
-            f"Continuous range: {full_start.strftime('%Y-%m-%d %H:%M')} → "
-            f"{full_end.strftime('%Y-%m-%d %H:%M')} {LOCAL_TZ_LABEL} | Focus day: {caption_day} | Sessions: {caption_sessions}"
-        )
+    coverage_text = (
+        f"Data coverage ({LOCAL_TZ_LABEL}): "
+        f"{coverage_start.strftime('%Y-%m-%d %H:%M')} \u2192 {coverage_end.strftime('%Y-%m-%d %H:%M')}"
+    )
+caption_sessions = ", ".join(s.upper() for s in selected_sessions)
+caption_text = f"{coverage_text} | Sessions: {caption_sessions}"
 
-fig = make_orb_figure(
-    plot_df,
-    symbol=symbol_choice,
-    timeframe=chart_tf,
-    title_prefix="ORB Levels",
-    sessions=selected_sessions,
-    x_range=x_range,
-    session_visibility=session_visibility,
-    show_buy_volume=show_buy_volume,
-    show_sell_volume=show_sell_volume,
-)
+initial_range = None
+if not plot_df.empty:
+    idx_range = plot_df.index.sort_values()
+    end_ts = idx_range.max()
+    start_ts = None
+    if view_choice == "1d":
+        start_candidate = end_ts - pd.Timedelta(days=1)
+        min_ts = idx_range.min()
+        start_ts = start_candidate if start_candidate > min_ts else min_ts
+    elif view_choice == "ncandles":
+        n = int(candle_window)
+        if n > 0:
+            if n < len(idx_range):
+                start_ts = idx_range[-n]
+            else:
+                start_ts = idx_range.min()
+    if start_ts is not None and end_ts is not None:
+        if start_ts > end_ts:
+            start_ts, end_ts = end_ts, start_ts
+        initial_range = (start_ts, end_ts)
+
 st.caption(caption_text)
-st.plotly_chart(fig, use_container_width=True)
+chart_title = f"{symbol_choice} ({chart_tf})"
+
+try:
+    if chart_backend == "Plotly":
+        fig = make_orb_figure(
+            plot_df,
+            symbol=symbol_choice,
+            timeframe=chart_tf,
+            title_prefix="ORB Levels",
+            sessions=selected_sessions,
+            session_visibility=session_visibility,
+            show_buy_volume=show_buy_volume,
+            show_sell_volume=show_sell_volume,
+            show_day_boundaries=True,
+            show_prev_levels=True,
+            show_rangeslider=True,
+            initial_x_range=initial_range,
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        candle_frame = prepare_candlestick_frame(plot_df)
+        bokeh_fig = make_bokeh_candlestick(
+            candle_frame,
+            title=chart_title,
+            timeframe=chart_tf,
+            sessions=selected_sessions,
+            session_visibility=session_visibility,
+            show_sessions=True,
+            show_prev_levels=True,
+            show_buy_volume=show_buy_volume,
+            show_sell_volume=show_sell_volume,
+            show_day_boundaries=True,
+            x_range=initial_range,
+        )
+        st.bokeh_chart(bokeh_fig, use_container_width=True)
+except ChartBackendError as exc:
+    st.error(str(exc))
 
 with st.expander("Full pipeline output (first 200 rows)", expanded=False):
     st.dataframe(frame.head(200), use_container_width=True)

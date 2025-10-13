@@ -8,6 +8,12 @@ from .orb_levels import (
 )
 from .pipeline import OrbDataPipeline
 from .figure import make_orb_figure
+from .alt_charts import (
+    CandlestickFrame,
+    prepare_candlestick_frame,
+    make_bokeh_candlestick,
+    ChartBackendError,
+)
 
 __all__ = [
     "BinanceClient",
@@ -20,4 +26,8 @@ __all__ = [
     "OrbDataPipeline",
     "add_candle_statistics",
     "add_volume_spread_bins",
+    "CandlestickFrame",
+    "prepare_candlestick_frame",
+    "make_bokeh_candlestick",
+    "ChartBackendError",
 ]
