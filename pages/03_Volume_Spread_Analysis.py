@@ -93,17 +93,17 @@ def _summary_for_column(
         bull_returns = group.loc[group["bullish"], "return_pct"].dropna()
         bear_returns = group.loc[~group["bullish"], "return_pct"].dropna()
 
+        total_return = (group.loc[group["bullish"], "return_pct"].sum()) * 100.0 if samples else np.nan
+        total_loss = (group.loc[~group["bullish"], "return_pct"].sum()) * 100.0 if samples else np.nan
+
         return pd.Series(
             {
                 "Samples": samples,
-                "Bullish %": bullish_pct,
-                "Bearish %": bearish_pct,
                 "Dominant": dominant,
+                "Dominant count": bullish_count if dominant == "Bullish" else bearish_count,
                 "Dominant %": dominant_pct,
-                "Bullish count": bullish_count,
-                "Bearish count": bearish_count,
-                "Avg return %": mean_return,
-                "Median return %": median_return,
+                "Total Return": total_return,
+                "Total Loss": total_loss,
                 "Avg bull return %": bull_returns.mean() * 100.0 if not bull_returns.empty else np.nan,
                 "Avg bear return %": bear_returns.mean() * 100.0 if not bear_returns.empty else np.nan,
             }
@@ -121,16 +121,27 @@ def _summary_for_column(
         summary = summary.sort_values(by="Samples", ascending=False)
 
     numeric_cols = [
-        "Bullish %",
-        "Bearish %",
         "Dominant %",
-        "Avg return %",
-        "Median return %",
+        "Total Return",
+        "Total Loss",
         "Avg bull return %",
         "Avg bear return %",
     ]
     summary[numeric_cols] = summary[numeric_cols].round(2)
     summary.reset_index(drop=True, inplace=True)
+    summary = summary[
+        [
+            "Pattern",
+            "Dominant",
+            "Dominant count",
+            "Samples",
+            "Dominant %",
+            "Total Return",
+            "Total Loss",
+            "Avg bull return %",
+            "Avg bear return %",
+        ]
+    ]
     return summary
 
 
@@ -163,51 +174,35 @@ def main() -> None:
     min_samples = st.number_input("Minimum samples per pattern", min_value=5, max_value=500, value=25, step=5)
     sort_choice = st.selectbox(
         "Sort results by",
-        options=["Samples", "Dominant %", "Bullish %", "Bearish %"],
-        index=0,
+        options=["Samples", "Dominant %"],
+        index=1,
     )
     sort_order = st.radio("Sort order", options=["Descending", "Ascending"], index=0, horizontal=True)
     ascending = sort_order == "Ascending"
 
-    top_n = st.slider("Rows to display", min_value=5, max_value=100, value=20, step=5)
+    top_n = st.slider("Rows to display", min_value=5, max_value=200, value=100, step=5)
 
-    st.markdown("### Scenario 1 - Volume-Spread profile of the preceding candle")
-    scenario1 = _summary_for_column(
+    scenarios = {
+        "Scenario 1 - prior candle profile": ("vsp_prev1", "volume_spread_scenario1.csv"),
+        "Scenario 2 - prior two-candle combo": ("vsp_combo_prev2", "volume_spread_scenario2.csv"),
+    }
+    scenario_label = st.selectbox("Scenario", list(scenarios.keys()), index=0)
+    column_name, file_name = scenarios[scenario_label]
+    summary = _summary_for_column(
         filtered,
-        "vsp_prev1",
+        column_name,
         min_samples=int(min_samples),
         sort_by=sort_choice,
         ascending=ascending,
     )
-    if scenario1.empty:
-        st.info("No qualifying rows for Scenario 1 after applying filters.")
+    if summary.empty:
+        st.info("No qualifying rows for the selected scenario after applying filters.")
     else:
-        st.dataframe(scenario1.head(top_n), use_container_width=True)
+        st.dataframe(summary.head(top_n), use_container_width=True)
         st.download_button(
-            "Download Scenario 1 table",
-            data=scenario1.to_csv(index=False).encode(),
-            file_name="volume_spread_scenario1.csv",
-            mime="text/csv",
-            use_container_width=True,
-        )
-
-    st.markdown("---")
-    st.markdown("### Scenario 2 - Volume-Spread combination of preceding two candles")
-    scenario2 = _summary_for_column(
-        filtered,
-        "vsp_combo_prev2",
-        min_samples=int(min_samples),
-        sort_by=sort_choice,
-        ascending=ascending,
-    )
-    if scenario2.empty:
-        st.info("No qualifying rows for Scenario 2 after applying filters.")
-    else:
-        st.dataframe(scenario2.head(top_n), use_container_width=True)
-        st.download_button(
-            "Download Scenario 2 table",
-            data=scenario2.to_csv(index=False).encode(),
-            file_name="volume_spread_scenario2.csv",
+            "Download table",
+            data=summary.to_csv(index=False).encode(),
+            file_name=file_name,
             mime="text/csv",
             use_container_width=True,
         )
