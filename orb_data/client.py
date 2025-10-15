@@ -125,7 +125,12 @@ class BinanceClient:
                 "limit": batch_limit,
                 "startTime": next_ms,
             }
-            batch = self.exchange.publicGetKlines(payload)
+            try:
+                batch = self.exchange.publicGetKlines(payload)
+            except (NetworkError, ExchangeError) as exc:
+                logger.warning("Binance fetch for %s %s failed: %s; retrying in 1s", symbol, timeframe, exc)
+                time.sleep(1.0)
+                continue
             if not batch:
                 break
 

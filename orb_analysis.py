@@ -9,6 +9,27 @@ SESSIONS: List[str] = ["asia", "europe", "us", "overnight"]
 UP_TARGETS: List[str] = ["orb_high", "L1_bull", "L2_bull", "L3_bull", "prev_day_high", "prev_week_high"]
 DOWN_TARGETS: List[str] = ["orb_low", "L1_bear", "L2_bear", "L3_bear", "prev_day_low", "prev_week_low"]
 
+BOOLEAN_FEATURES: List[str] = [
+    "bullish_candle",
+    "close_above_mid",
+    "is_doji",
+    "is_spinning_top",
+    "is_long_legged_doji",
+    "is_marubozu",
+    "is_hammer",
+    "is_inverted_hammer",
+    "is_shooting_star",
+]
+
+CATEGORICAL_FEATURES: List[str] = ["volume_bin", "spread_bin", "volume_spread_profile"]
+QUANT_FEATURES: List[str] = [
+    "body_ratio",
+    "upper_wick_ratio",
+    "lower_wick_ratio",
+    "volume_percentile",
+    "spread_percentile",
+]
+
 
 def _prepare_dataframe(frame: pd.DataFrame) -> pd.DataFrame:
     """Return a DataFrame with explicit `time` and `symbol` columns."""
@@ -551,4 +572,290 @@ def identify_best_target(summary: pd.DataFrame) -> Dict[str, object] | None:
         return None
     ranked = summary.sort_values(["hit_rate", "hits"], ascending=[False, False])
     return ranked.iloc[0].to_dict()
+
+
+def _determine_directional_bias(row: pd.Series) -> str | None:
+    close_price = row.get("close")
+    open_price = row.get("open")
+    ema_5 = row.get("ema_5")
+    ema_13 = row.get("ema_13")
+    direction = row.get("candle_direction", 0)
+
+    if pd.isna(close_price) or pd.isna(open_price):
+        return None
+
+    if not pd.isna(ema_5) and not pd.isna(ema_13):
+        if ema_5 >= ema_13 and close_price >= ema_5:
+            return "up"
+        if ema_5 <= ema_13 and close_price <= ema_5:
+            return "down"
+
+    if direction > 0:
+        return "up"
+    if direction < 0:
+        return "down"
+    return None
+
+
+def _target_column_for_level(level: str, session: str, bias: str) -> str:
+    if level == "orb":
+        return f"orb_high_{session}" if bias == "up" else f"orb_low_{session}"
+    if level == "L1":
+        return f"L1_bull_{session}" if bias == "up" else f"L1_bear_{session}"
+    if level == "L2":
+        return f"L2_bull_{session}" if bias == "up" else f"L2_bear_{session}"
+    if level == "L3":
+        return f"L3_bull_{session}" if bias == "up" else f"L3_bear_{session}"
+    raise ValueError(f"Unsupported target level '{level}'")
+
+
+def compute_pullback_trades(
+    frame: pd.DataFrame,
+    *,
+    session: str | None = None,
+    target_level: str = "orb",
+) -> pd.DataFrame:
+    if target_level not in {"orb", "L1", "L2", "L3"}:
+        raise ValueError("target_level must be one of 'orb', 'L1', 'L2', 'L3'")
+
+    data = _prepare_dataframe(frame)
+    if data.empty:
+        return pd.DataFrame()
+
+    records: List[Dict[str, object]] = []
+    session_list = [session] if session else SESSIONS
+
+    if "time" in data.columns:
+        data["time"] = pd.to_datetime(data["time"])
+
+    if "symbol" in data.columns:
+        symbol_groups = data.groupby("symbol", sort=False)
+    else:
+        symbol_groups = [(None, data)]
+
+    for symbol, symbol_df in symbol_groups:
+        for sess in session_list:
+            sid_col = f"session_id_{sess}"
+            orb_flag_col = f"is_orb_{sess}"
+            if sid_col not in symbol_df.columns or orb_flag_col not in symbol_df.columns:
+                continue
+
+            session_df = symbol_df[symbol_df[sid_col].notna()].copy()
+            if session_df.empty:
+                continue
+
+            session_df.sort_values("time", inplace=True)
+            for session_id, chunk in session_df.groupby(sid_col, sort=False):
+                chunk = chunk.copy()
+                chunk.sort_values("time", inplace=True)
+                orb_rows = chunk[chunk[orb_flag_col].fillna(False)]
+                if orb_rows.empty:
+                    continue
+                orb_candle = orb_rows.iloc[-1]
+                bias = _determine_directional_bias(orb_candle)
+                if bias is None:
+                    continue
+
+                level_col = f"orb_low_{sess}" if bias == "up" else f"orb_high_{sess}"
+                stop_col = level_col
+                target_col = _target_column_for_level(target_level, sess, bias)
+
+                target_price = orb_candle.get(target_col)
+                stop_price = orb_candle.get(stop_col)
+                if pd.isna(target_price) or pd.isna(stop_price):
+                    continue
+
+                post = chunk[chunk["time"] > orb_candle["time"]].copy()
+                if post.empty:
+                    continue
+
+                entry_row: pd.Series | None = None
+                for _, row in post.iterrows():
+                    level_value = row.get(level_col)
+                    if pd.isna(level_value):
+                        level_value = orb_candle.get(level_col)
+                    if pd.isna(level_value):
+                        continue
+
+                    if bias == "up":
+                        touched = pd.notna(row.get("low")) and row["low"] <= level_value
+                        reversal = pd.notna(row.get("close")) and pd.notna(row.get("open")) and row["close"] > row["open"]
+                    else:
+                        touched = pd.notna(row.get("high")) and row["high"] >= level_value
+                        reversal = pd.notna(row.get("close")) and pd.notna(row.get("open")) and row["close"] < row["open"]
+
+                    if touched and reversal:
+                        entry_row = row
+                        break
+
+                if entry_row is None:
+                    continue
+
+                entry_time = pd.to_datetime(entry_row["time"])
+                entry_price = float(entry_row["close"])
+                eval_df = post[post["time"] > entry_time].copy()
+
+                outcome = "none"
+                outcome_row: pd.Series | None = None
+                for _, row in eval_df.iterrows():
+                    high = row.get("high")
+                    low = row.get("low")
+
+                    if bias == "up":
+                        target_hit = pd.notna(high) and high >= target_price
+                        stop_hit = pd.notna(low) and low <= stop_price
+                    else:
+                        target_hit = pd.notna(low) and low <= target_price
+                        stop_hit = pd.notna(high) and high >= stop_price
+
+                    if target_hit and stop_hit:
+                        stop_hit = True
+                        target_hit = False
+
+                    if target_hit:
+                        outcome = "target"
+                        outcome_row = row
+                        break
+                    if stop_hit:
+                        outcome = "stop"
+                        outcome_row = row
+                        break
+
+                minutes_to_outcome = None
+                if outcome_row is not None:
+                    minutes_to_outcome = (
+                        pd.to_datetime(outcome_row["time"]) - entry_time
+                    ).total_seconds() / 60.0
+
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "session": sess,
+                        "session_id": session_id,
+                        "bias": bias,
+                        "target_level": target_level,
+                        "orb_time": pd.to_datetime(orb_candle["time"]),
+                        "entry_time": entry_time,
+                        "entry_price": entry_price,
+                        "target_price": float(target_price),
+                        "stop_price": float(stop_price),
+                        "outcome": outcome,
+                        "minutes_to_outcome": minutes_to_outcome,
+                        "entry_candle_open": float(entry_row.get("open", float("nan"))),
+                        "entry_candle_high": float(entry_row.get("high", float("nan"))),
+                        "entry_candle_low": float(entry_row.get("low", float("nan"))),
+                        "entry_candle_close": float(entry_row.get("close", float("nan"))),
+                        "volume_bin": entry_row.get("volume_bin"),
+                        "spread_bin": entry_row.get("spread_bin"),
+                        "volume_spread_profile": entry_row.get("volume_spread_profile"),
+                    }
+                )
+
+    if not records:
+        return pd.DataFrame()
+    result = pd.DataFrame(records)
+    result["symbol"] = result["symbol"].astype("string")
+    return result
+
+
+def _boolean_feature_lift(data: pd.DataFrame) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    hits = data["__hit_mask"]
+    misses = ~hits
+    for column in BOOLEAN_FEATURES:
+        if column not in data.columns:
+            continue
+        series = data[column].fillna(False).astype(bool)
+        hit_share = series.loc[hits].mean() if hits.any() else float("nan")
+        miss_share = series.loc[misses].mean() if misses.any() else float("nan")
+        rows.append(
+            {
+                "feature": column,
+                "hit_share": hit_share,
+                "miss_share": miss_share,
+                "lift": hit_share - miss_share if pd.notna(hit_share) and pd.notna(miss_share) else float("nan"),
+            }
+        )
+    result = pd.DataFrame(rows)
+    if not result.empty:
+        result.sort_values(by="lift", ascending=False, inplace=True, na_position="last")
+    return result
+
+
+def _categorical_feature_tables(data: pd.DataFrame, min_count: int) -> Dict[str, pd.DataFrame]:
+    tables: Dict[str, pd.DataFrame] = {}
+    for column in CATEGORICAL_FEATURES:
+        if column not in data.columns:
+            continue
+        grouped = (
+            data.groupby(column, dropna=False)["__hit_mask"]
+            .agg(hit_rate="mean", hits="sum", opportunities="count")
+            .reset_index()
+            .rename(columns={column: "bucket"})
+        )
+        filtered = grouped[grouped["opportunities"] >= min_count]
+        filtered.sort_values(by=["hit_rate", "hits"], ascending=[False, False], inplace=True)
+        tables[column] = filtered
+    return tables
+
+
+def _quantitative_feature_summary(data: pd.DataFrame) -> pd.DataFrame:
+    rows: List[Dict[str, object]] = []
+    hits = data["__hit_mask"]
+    misses = ~hits
+    for column in QUANT_FEATURES:
+        if column not in data.columns:
+            continue
+        series = pd.to_numeric(data[column], errors="coerce").dropna()
+        hit_series = pd.to_numeric(data.loc[hits, column], errors="coerce").dropna()
+        miss_series = pd.to_numeric(data.loc[misses, column], errors="coerce").dropna()
+        rows.append(
+            {
+                "feature": column,
+                "hit_p25": hit_series.quantile(0.25) if not hit_series.empty else float("nan"),
+                "hit_median": hit_series.median() if not hit_series.empty else float("nan"),
+                "hit_p75": hit_series.quantile(0.75) if not hit_series.empty else float("nan"),
+                "miss_median": miss_series.median() if not miss_series.empty else float("nan"),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def feature_lift_summary(
+    outcomes: pd.DataFrame,
+    *,
+    session: str,
+    target: str,
+    direction: str,
+    min_count_ratio: float = 0.05,
+) -> Dict[str, object]:
+    data = outcomes.copy()
+    data = data[data["session"] == session]
+    if data.empty:
+        return {}
+
+    available_col = f"available_{target}"
+    ttt_col = f"tt_{direction}_{target}"
+    if available_col not in data.columns or ttt_col not in data.columns:
+        return {}
+
+    subset = data[data[available_col].fillna(False)].copy()
+    if subset.empty:
+        return {}
+
+    subset["__hit_mask"] = subset[ttt_col].notna()
+    min_count = max(3, int(len(subset) * min_count_ratio))
+
+    boolean_df = _boolean_feature_lift(subset)
+    categorical_tables = _categorical_feature_tables(subset, min_count)
+    quant_df = _quantitative_feature_summary(subset)
+
+    return {
+        "total_opportunities": len(subset),
+        "hits": int(subset["__hit_mask"].sum()),
+        "hit_rate": subset["__hit_mask"].mean(),
+        "boolean": boolean_df,
+        "categorical": categorical_tables,
+        "quantitative": quant_df,
+    }
 

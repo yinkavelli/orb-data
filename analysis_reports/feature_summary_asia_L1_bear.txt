@@ -1,0 +1,49 @@
+Target: L1_bear (down)
+Opportunities: 86
+Hits: 60
+Hit rate: 69.8%
+Time-to-target (minutes): p25=45.0, median=67.5, p75=153.75
+First outcome counts:
+  stop: 55
+  target: 29
+  None: 2
+
+Boolean feature lift (Top 6 by positive lift):
+           feature  hit_share  miss_share   lift
+    bullish_candle      0.550       0.423  0.127
+   close_above_mid      0.517       0.423  0.094
+         is_hammer      0.033       0.000  0.033
+       is_marubozu      0.067       0.077 -0.010
+is_inverted_hammer      0.100       0.154 -0.054
+  is_shooting_star      0.100       0.154 -0.054
+
+Top volume_bin buckets (min count applied):
+          bucket  hit_rate  hits  opportunities
+      Low Volume      80.0     8             10
+     High Volume      78.3    18             23
+  Average Volume      71.4    10             14
+Very High Volume      63.6    21             33
+ Very Low Volume      50.0     3              6
+
+Top spread_bin buckets (min count applied):
+            bucket  hit_rate  hits  opportunities
+  Very Wide Spread      76.5    26             34
+       Wide Spread      66.7    10             15
+     Narrow Spread      66.7     8             12
+    Average Spread      64.3     9             14
+Very Narrow Spread      63.6     7             11
+
+Top volume_spread_profile buckets (min count applied):
+                             bucket  hit_rate  hits  opportunities
+          High Volume | Wide Spread      85.7     6              7
+        High Volume | Narrow Spread      80.0     4              5
+Very High Volume | Very Wide Spread      75.0    18             24
+    Average Volume | Average Spread      75.0     3              4
+         Low Volume | Narrow Spread      75.0     3              4
+     High Volume | Very Wide Spread      71.4     5              7
+
+Body / wick / percentile summary (hit vs miss):
+         feature  hit_p25  hit_median  hit_p75  miss_median
+      body_ratio    0.351       0.585    0.777        0.383
+upper_wick_ratio    0.056       0.188    0.355        0.215
+lower_wick_ratio    0.019       0.142    0.272        0.168

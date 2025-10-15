@@ -14,12 +14,16 @@ from orb_analysis import (
     DOWN_TARGETS,
     UP_TARGETS,
     compute_orb_outcomes,
+    compute_pullback_trades,
+    feature_lift_summary,
     identify_best_target,
     summarise_target_hits,
     summarise_target_vs_stop,
 )
 from orb_data import ChartBackendError, make_bokeh_candlestick, prepare_candlestick_frame
 from orb_data.figure import make_orb_figure
+
+SESSION_NAMES = SESSIONS.copy()
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +80,31 @@ def _slice_symbol(frame: pd.DataFrame, symbol: str) -> pd.DataFrame:
     elif "symbol" in data.columns:
         data = data[data["symbol"] == symbol]
     return data.copy()
+
+
+def _ensure_time_columns(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    idx = df.index
+    if getattr(idx, "tz", None) is None:
+        idx = pd.DatetimeIndex(idx, tz="UTC")
+        df.index = idx
+    else:
+        idx = idx.tz_convert("UTC")
+        df.index = idx
+    if "time_utc" not in df.columns:
+        df["time_utc"] = idx
+    if "time_utc_plus4" in df.columns:
+        local_series = pd.to_datetime(df["time_utc_plus4"])
+        if getattr(local_series.dtype, "tz", None) is None:
+            local_series = local_series.dt.tz_localize("Etc/GMT-4")
+        else:
+            local_series = local_series.dt.tz_convert("Etc/GMT-4")
+    else:
+        local_series = idx.tz_convert("Etc/GMT-4")
+    df["time_utc_plus4"] = local_series
+    df["time_local"] = local_series
+    return df
 
 
 def _filter_day(frame: pd.DataFrame, symbol: str, day: date) -> pd.DataFrame:
@@ -744,19 +773,253 @@ def main() -> None:
             target=target_selection,
             direction=direction,
         )
-        if detail_df.empty:
-            st.info("No outcome rows available for the selected combination.")
+    if detail_df.empty:
+        st.info("No outcome rows available for the selected combination.")
+    else:
+        st.dataframe(detail_df, use_container_width=True)
+        csv_bytes = detail_df.to_csv(index=False).encode()
+        st.download_button(
+            "Download filtered rows",
+            data=csv_bytes,
+            file_name=f"orb_outcomes_{direction}_{target_selection}.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="raw_download_button",
+        )
+
+    st.markdown("---")
+    st.subheader("Pullback strategy explorer")
+    if not session_options:
+        st.info("No sessions available for pullback analysis.")
+    else:
+        pullback_cols = st.columns(3)
+        pullback_session = pullback_cols[0].selectbox(
+            "Session",
+            session_options,
+            index=session_options.index(selected_session) if selected_session in session_options else 0,
+            key="pullback_session_select",
+        )
+        target_labels = {
+            "ORB high/low": "orb",
+            "L1 extension": "L1",
+            "L2 extension": "L2",
+            "L3 extension": "L3",
+        }
+        pullback_target_label = pullback_cols[1].selectbox(
+            "Target level",
+            list(target_labels.keys()),
+            index=0,
+            key="pullback_target_level_select",
+        )
+        pullback_df = compute_pullback_trades(
+            frame,
+            session=pullback_session,
+            target_level=target_labels[pullback_target_label],
+        )
+        if pullback_df.empty:
+            st.info("No qualifying pullback trades detected for the selected session.")
         else:
-            st.dataframe(detail_df, use_container_width=True)
-            csv_bytes = detail_df.to_csv(index=False).encode()
-            st.download_button(
-                "Download filtered rows",
-                data=csv_bytes,
-                file_name=f"orb_outcomes_{direction}_{target_selection}.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="raw_download_button",
+            pullback_summary = (
+                pullback_df.groupby("bias", dropna=False)["outcome"]
+                .agg(
+                    trades="count",
+                    target_hits=lambda s: int((s == "target").sum()),
+                    stop_hits=lambda s: int((s == "stop").sum()),
+                    pending=lambda s: int((s == "none").sum()),
+                )
+                .reset_index()
             )
+            pullback_summary["hit_rate"] = pullback_summary["target_hits"] / pullback_summary["trades"]
+            st.dataframe(pullback_summary, use_container_width=True)
+
+            symbols_available = sorted([sym for sym in pullback_df["symbol"].dropna().unique()])
+            if not symbols_available:
+                st.info("No symbol data available for charting these trades.")
+            else:
+                pullback_symbol = pullback_cols[2].selectbox(
+                    "Symbol",
+                    symbols_available,
+                    index=0,
+                    key="pullback_symbol_select",
+                )
+                pullback_subset = pullback_df[pullback_df["symbol"] == pullback_symbol].copy()
+                if pullback_subset.empty:
+                    st.info("No pullback trades for the selected symbol.")
+                else:
+                    outcomes_list = ["All", "target", "stop", "none"]
+                    outcome_choice = st.selectbox(
+                        "Outcome filter",
+                        outcomes_list,
+                        index=0,
+                        key="pullback_outcome_filter",
+                    )
+                    if outcome_choice != "All":
+                        pullback_subset = pullback_subset[pullback_subset["outcome"] == outcome_choice].copy()
+                    if pullback_subset.empty:
+                        st.info("No pullback trades match the selected filters.")
+                    else:
+                        entry_times = pd.to_datetime(pullback_subset["entry_time"], utc=True)
+                        date_default = (entry_times.dt.date.min(), entry_times.dt.date.max())
+                        date_range = st.date_input(
+                            "Entry date range",
+                            value=date_default if date_default[0] is not None else None,
+                            min_value=date_default[0],
+                            max_value=date_default[1],
+                            key="pullback_date_range",
+                        )
+                        if isinstance(date_range, tuple) and len(date_range) == 2 and date_range[0] and date_range[1]:
+                            start_date, end_date = date_range
+                            if start_date > end_date:
+                                start_date, end_date = end_date, start_date
+                            mask_dates = (entry_times.dt.date >= start_date) & (entry_times.dt.date <= end_date)
+                            pullback_subset = pullback_subset.loc[mask_dates].copy()
+                            entry_times = pd.to_datetime(pullback_subset["entry_time"], utc=True)
+                        if pullback_subset.empty:
+                            st.info("No trades remain after applying the date filter.")
+                        else:
+                            volume_cols = st.columns(2)
+                            show_buy_volume = volume_cols[0].checkbox(
+                                "Show buy volume (pullback)",
+                                value=False,
+                                key="pullback_show_buy_volume_toggle",
+                            )
+                            show_sell_volume = volume_cols[1].checkbox(
+                                "Show sell volume (pullback)",
+                                value=False,
+                                key="pullback_show_sell_volume_toggle",
+                            )
+                            target_points: List[Dict[str, object]] = []
+                            stop_points: List[Dict[str, object]] = []
+                            pending_points: List[Dict[str, object]] = []
+                            for _, trade_row in pullback_subset.iterrows():
+                                point = {
+                                    "time": trade_row["entry_time"],
+                                    "price": trade_row["entry_price"],
+                                    "session_id": trade_row.get("session_id"),
+                                    "minutes": trade_row.get("minutes_to_outcome"),
+                                }
+                                if trade_row["outcome"] == "target":
+                                    target_points.append(point)
+                                elif trade_row["outcome"] == "stop":
+                                    stop_points.append(point)
+                                else:
+                                    pending_points.append(point)
+
+                            symbol_frame = _slice_symbol(frame, pullback_symbol)
+                            symbol_frame = _ensure_time_columns(symbol_frame)
+                            candle_frame = prepare_candlestick_frame(symbol_frame)
+                            chart_tf_value = st.session_state.get("orb_chart_tf", "15m")
+                            bias_session = [pullback_session]
+                            bokeh_fig = make_bokeh_candlestick(
+                                candle_frame,
+                                title=f"{pullback_symbol} Pullback Entries",
+                                timeframe=chart_tf_value,
+                                sessions=bias_session,
+                                session_visibility={name: name in bias_session for name in SESSION_NAMES},
+                                show_sessions=True,
+                                show_prev_levels=True,
+                                show_buy_volume=show_buy_volume,
+                                show_sell_volume=show_sell_volume,
+                                show_day_boundaries=True,
+                                x_range=(entry_times.min(), entry_times.max() + pd.Timedelta(hours=6)) if not entry_times.empty else None,
+                            )
+                            _add_marker_layer(bokeh_fig, target_points, "triangle", "#2E7D32")
+                            _add_marker_layer(bokeh_fig, stop_points, "inverted_triangle", "#C62828")
+                            _add_marker_layer(bokeh_fig, pending_points, "circle", "#616161")
+                            st.bokeh_chart(bokeh_fig, use_container_width=True)
+
+                            trade_csv = pullback_subset.to_csv(index=False).encode()
+                            st.download_button(
+                                "Download pullback trades",
+                                data=trade_csv,
+                                file_name=f"pullback_trades_{pullback_session}_{pullback_symbol}.csv",
+                                mime="text/csv",
+                                use_container_width=True,
+                            )
+
+    st.markdown("---")
+    st.subheader("Feature dominance explorer")
+    feature_session = st.selectbox(
+        "Session for feature analysis",
+        session_options,
+        index=session_options.index(selected_session) if selected_session in session_options else 0,
+        key="feature_session_select",
+    )
+    feature_direction_label = st.radio(
+        "Direction",
+        options=["Long (up targets)", "Short (down targets)"],
+        horizontal=True,
+        key="feature_direction_radio",
+    )
+    if feature_direction_label.startswith("Long"):
+        feature_direction = "up"
+        feature_targets = UP_TARGETS
+        feature_default = "L1_bull" if "L1_bull" in feature_targets else feature_targets[0]
+    else:
+        feature_direction = "down"
+        feature_targets = DOWN_TARGETS
+        feature_default = "L1_bear" if "L1_bear" in feature_targets else feature_targets[0]
+    feature_target = st.selectbox(
+        "Target",
+        feature_targets,
+        index=feature_targets.index(feature_default),
+        key="feature_target_select",
+    )
+
+    feature_result = feature_lift_summary(
+        outcomes,
+        session=feature_session,
+        target=feature_target,
+        direction=feature_direction,
+    )
+    if not feature_result:
+        st.info("No opportunities available to compute feature dominance for the selected configuration.")
+    else:
+        meta_cols = st.columns(3)
+        meta_cols[0].metric("Opportunities", feature_result["total_opportunities"])
+        meta_cols[1].metric("Hits", feature_result["hits"])
+        meta_cols[2].metric("Hit rate", f"{feature_result['hit_rate']*100:.1f}%")
+
+        bool_df = feature_result["boolean"]
+        if isinstance(bool_df, pd.DataFrame) and not bool_df.empty:
+            st.markdown("**Boolean feature lift**")
+            st.dataframe(bool_df, use_container_width=True)
+
+        cat_tables = feature_result["categorical"]
+        if cat_tables:
+            st.markdown("**Top categorical buckets**")
+            for label, table in cat_tables.items():
+                if table.empty:
+                    continue
+                st.caption(label.replace("_", " "))
+                display = table.copy()
+                display["hit_rate"] = (display["hit_rate"] * 100).round(1)
+                st.dataframe(display, use_container_width=True)
+
+        quant_df = feature_result["quantitative"]
+        if isinstance(quant_df, pd.DataFrame) and not quant_df.empty:
+            st.markdown("**Quantitative feature summary**")
+            st.dataframe(quant_df, use_container_width=True)
+
+        feature_csv = pd.concat(
+            [df.assign(table=name) for name, df in cat_tables.items() if isinstance(df, pd.DataFrame) and not df.empty],
+            ignore_index=True,
+        ) if cat_tables else pd.DataFrame()
+        export_payload = {
+            "boolean": bool_df.to_csv(index=False) if isinstance(bool_df, pd.DataFrame) and not bool_df.empty else "",
+            "quantitative": quant_df.to_csv(index=False) if isinstance(quant_df, pd.DataFrame) and not quant_df.empty else "",
+            "categorical": feature_csv.to_csv(index=False) if not feature_csv.empty else "",
+        }
+        combined_bytes = "\n\n".join(
+            f"# {name}\n{content}" for name, content in export_payload.items() if content
+        ).encode()
+        st.download_button(
+            "Download feature tables",
+            data=combined_bytes,
+            file_name=f"feature_dominance_{feature_session}_{feature_target}_{feature_direction}.txt",
+            mime="text/plain",
+            use_container_width=True,
+        )
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
+from ccxt.base.errors import ExchangeError, NetworkError
 
 from orb_data import (
     DEFAULT_SESSIONS,
@@ -205,6 +206,16 @@ if run_btn:
                     int(volume_window),
                     int(percentile_bins),
                 )
+            except (NetworkError, ExchangeError) as exc:
+                status.update(label="Fetch failed", state="error")
+                st.error(
+                    "Pipeline error: Binance API request failed. This usually means a temporary network issue or "
+                    "rate-limit response. Try reducing the symbol list or widening the date window, then retry.\n\n"
+                    f"Details: {exc}"
+                )
+                frame = pd.DataFrame()
+                exchange_name = None
+                resolved_symbols = symbols_tuple
             except Exception as exc:
                 status.update(label="Fetch failed", state="error")
                 st.error(f"Pipeline error: {exc}")
