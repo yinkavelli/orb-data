@@ -19,7 +19,7 @@ from orb_data.figure import make_orb_figure
 st.set_page_config(page_title="ORB Data Viewer", layout="wide")
 st.title("ORB Data Viewer")
 
-DEFAULT_SYMBOLS = "BTC/USDT,ETH/USDT"
+DEFAULT_SYMBOLS = "BTC/USDT"
 TIMEFRAMES = ["1m", "5m", "15m", "30m", "1h", "4h"]
 SESSION_NAMES = [session.name for session in DEFAULT_SESSIONS]
 SESSION_PRESETS: Dict[str, List[str]] = {
@@ -117,9 +117,9 @@ def _ensure_time_columns(df: pd.DataFrame) -> pd.DataFrame:
 with st.sidebar:
     st.header("Parameters")
     symbols_text = st.text_input("Symbols", value=DEFAULT_SYMBOLS)
-    chart_tf = st.selectbox("Chart timeframe", TIMEFRAMES, index=0)
-    orb_tf = st.selectbox("ORB timeframe", TIMEFRAMES, index=3, help="Timeframe used for ORB levels")
-    start_dt = st.date_input("Start date", value=date(2025, 9, 30))
+    chart_tf = st.selectbox("Chart timeframe", TIMEFRAMES, index=2)
+    orb_tf = st.selectbox("ORB timeframe", TIMEFRAMES, index=2, help="Timeframe used for ORB levels")
+    start_dt = st.date_input("Start date", value=date(2025, 9, 1))
     use_end = st.checkbox("Use end date", value=False)
     end_dt = None
     if use_end:
@@ -128,7 +128,7 @@ with st.sidebar:
         "Percentile lookback (candles)",
         min_value=5,
         max_value=500,
-        value=20,
+        value=30,
         step=1,
         help="Window used to compute volume/spread percentiles.",
     )
